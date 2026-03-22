@@ -1,0 +1,25 @@
+[uwsgi]
+# Start uWSGI on a local port. Nginx will talk to this.
+socket = 127.0.0.1:5000
+
+chdir = /srv/memory-illumination
+
+virtualenv = /srv/memory-illumination/venv
+
+
+# The Python file (without .py)
+module = app
+
+# The Flask app object inside that file
+callable = app
+
+# Standard uWSGI settings
+master = true
+processes = 4
+threads = 2
+
+# Set permissions for the socket (good practice)
+chmod-socket = 660
+vacuum = true
+
+die-on-term = true
