@@ -4,7 +4,7 @@ socket = 127.0.0.1:5000
 
 chdir = /srv/memory-illumination
 
-virtualenv = /srv/memory-illumination/venv
+virtualenv = /srv/memory-illumination/.venv
 
 
 # The Python file (without .py)
