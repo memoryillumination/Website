@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 app = Flask(__name__)
-CORS(app) # Crucial for Cloudflare integration
+CORS(app)
 
 # Config
 app.config.update(
@@ -35,6 +35,23 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+# --- DATABASE INITIALIZATION ---
+def init_db():
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_active INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Create the table immediately on startup
+init_db()
+
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -42,16 +59,19 @@ def register():
     try:
         hash_pw = ph.hash(password)
         conn = get_db_connection()
-        conn.execute("INSERT INTO users (username, password_hash, is_active) VALUES (?, ?, 0)", (username, hash_pw))
+        conn.execute("INSERT INTO users (username, password_hash, is_active) VALUES (?, ?, 1)", (username, hash_pw))
         conn.commit()
         conn.close()
-        
-        token = serializer.dumps(username, salt='email-confirm')
-        confirm_url = f"https://api.memory-illumination.com/confirm/{token}"
-        msg = Message("Activate Account", recipients=[username], body=f"Link: {confirm_url}")
-        mail.send(msg)
-        return jsonify({"message": "Check email"}), 201
+
+        #token = serializer.dumps(username, salt='email-confirm')
+        #confirm_url = f"https://api.memory-illumination.com/confirm/{token}"
+        #msg = Message("Activate Account", recipients=[username], body=f"Link: {confirm_url}")
+        #mail.send(msg)
+        #return jsonify({"message": "Check email"}), 201
+
+        return jsonify({"message": "Registration successful"}), 201
     except Exception as e:
+        print(f"REGISTRATION ERROR: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/confirm/<token>')
@@ -84,14 +104,11 @@ def upload_file():
     file = request.files['myFile']
     settings = json.loads(request.form.get('settings', '{}'))
     input_data = file.read()
-    
-    # Simple logic choice based on checkbox
+
     if settings.get('featureB'):
-        # Modal Flux logic
         res = remote_model().process.remote(input_data)
         return send_file(io.BytesIO(res["flux_sketch"]), mimetype='image/png')
     else:
-        # Local CV2 Sketch logic
         img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
         inv = 255 - img
         blur = cv2.GaussianBlur(inv, (21, 21), 0)
