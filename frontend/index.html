@@ -4,66 +4,37 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
-    <script type="module" src="main.js" defer></script>
+    <title>Memory Illumination</title>
+    <script src="main.js" defer></script>
   </head>
-
   <body>
     <main class="container">
 
-      <form id="register-form" class="register-form">
+      <form id="register-form" class="register-form" style="display: none;">
         <h3>Register</h3>
         <div class="register-form-group">
-          <input 
-            id="reg-username-input" 
-            placeholder="Email" 
-          />       
+          <input id="reg-username-input" placeholder="Email" required />       
         </div>
-
         <div class="register-form-group">
-          <input
-            id="reg-password-input"
-            type="password"
-            placeholder="Password"
-          />
+          <input id="reg-password-input" type="password" placeholder="Password" required />
         </div>
-
-        <button id="send-register-inputs-btn" type="submit">
-          Register
-        </button>
-        
-        <button id="to-login-btn" type="button" class="secondary-btn">
-          Back to Login
-        </button>
+        <button id="send-register-inputs-btn" type="submit">Register</button>
+        <button id="to-login-btn" type="button" class="secondary-btn">Back to Login</button>
       </form>
 
       <form id="login-form" class="login-form">
         <h3>Login</h3>
         <div class="login-form-group">
-          <input 
-            id="login-username-input" 
-            placeholder="Username" 
-          />       
+          <input id="login-username-input" placeholder="Email" required />       
         </div>
-
         <div class="login-form-group">
-          <input
-            id="login-password-input"
-            type="password"
-            placeholder="Password"
-          />
+          <input id="login-password-input" type="password" placeholder="Password" required />
         </div>
-
-        <button id="send-login-inputs-btn" type="submit">
-          Login
-        </button>
-
-        <button id="to-register-btn" type="button" class="secondary-btn">
-          Need an account? Register
-        </button>
+        <button id="send-login-inputs-btn" type="submit">Login</button>
+        <button id="to-register-btn" type="button" class="secondary-btn">Need an account? Register</button>
       </form>
 
-      <form id="upload-form" class="upload-form"> 
+      <form id="upload-form" class="upload-form" style="display: none;"> 
         <h3>Upload Your File</h3>
         <div class="upload-form-file-input">
           <input type="file" id="file-input" />

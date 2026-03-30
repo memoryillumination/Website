@@ -1,5 +1,4 @@
 window.addEventListener("DOMContentLoaded", () => {
-  // --- Selectors ---
   const registerForm = document.querySelector("#register-form");
   const loginForm = document.querySelector("#login-form");
   const uploadForm = document.querySelector("#upload-form");
@@ -10,10 +9,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const toRegisterBtn = document.querySelector("#to-register-btn");
   const toLoginBtn = document.querySelector("#to-login-btn");
 
-  // Define your Backend API URL here
-  const API_BASE_URL = "https://api.memory-illumination.com"; [cite: 2]
+  const API_BASE_URL = "https://api.memory-illumination.com";
 
-  // --- Navigation Logic ---
+  // Navigation Logic
   toRegisterBtn.addEventListener("click", () => {
     loginForm.style.display = "none";
     registerForm.style.display = "flex";
@@ -26,109 +24,71 @@ window.addEventListener("DOMContentLoaded", () => {
     statusMessage.textContent = "";
   });
 
-  check1.addEventListener('change', () => {
-    if (check1.checked) check2.checked = false;
-  });
+  check1.addEventListener('change', () => { if (check1.checked) check2.checked = false; });
+  check2.addEventListener('change', () => { if (check2.checked) check1.checked = false; });
 
-  check2.addEventListener('change', () => {
-    if (check2.checked) check1.checked = false;
-  });
-
-  // --- Register Form Logic ---
+  // Register
   registerForm.addEventListener("submit", (e) => {
     e.preventDefault(); 
     const username = document.querySelector("#reg-username-input").value;
     const password = document.querySelector("#reg-password-input").value;
+    statusMessage.textContent = "Processing registration...";
 
-    fetch(`${API_BASE_URL}/register`, { [cite: 2]
+    fetch(`${API_BASE_URL}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     })
-    .then(response => {
-      if (!response.ok) throw new Error("Registration failed");
-      return response.json();
-    })
-    .then(data => {
+    .then(res => res.ok ? res.json() : Promise.reject())
+    .then(() => {
       registerForm.style.display = "none";
       loginForm.style.display = "flex";
-      statusMessage.textContent = `Registration Successful! Please check your email.`;
+      statusMessage.textContent = "Success! Please check your email to activate.";
     })
-    .catch(error => {
-      statusMessage.textContent = "Registration failed. Please try again.";
-      console.error("Error:", error);
-    });
+    .catch(() => { statusMessage.textContent = "Registration failed. Try again."; });
   });
 
-  // --- Login Form Logic ---
+  // Login
   loginForm.addEventListener("submit", (e) => {
     e.preventDefault(); 
     const username = document.querySelector("#login-username-input").value;
     const password = document.querySelector("#login-password-input").value;
 
-    fetch(`${API_BASE_URL}/login`, { [cite: 2]
+    fetch(`${API_BASE_URL}/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     })
-    .then(response => {
-      if (!response.ok) throw new Error("Login failed");
-      return response.json();
-    })
-    .then(data => {
-      registerForm.style.display = "none";
+    .then(res => res.ok ? res.json() : Promise.reject())
+    .then(() => {
       loginForm.style.display = "none";
       uploadForm.style.display = "flex";
-      statusMessage.textContent = `Welcome ${username}, Please upload a file.`;
+      statusMessage.textContent = `Welcome, ${username}!`;
     })
-    .catch(error => {
-      statusMessage.textContent = "Login failed. Check credentials or email verification.";
-      console.error("Error:", error);
-    });
+    .catch(() => { statusMessage.textContent = "Login failed. Verify email or check credentials."; });
   });
 
-  // --- Upload Form Logic ---
+  // Upload
   uploadForm.addEventListener("submit", (e) => {
     e.preventDefault(); 
     const file = fileInput.files[0];
+    if (!file) return statusMessage.textContent = "Select a file.";
 
-    if (file) {
-      statusMessage.textContent = `Uploading ${file.name}...`;
-      const formData = new FormData();
-      formData.append("myFile", file); 
+    statusMessage.textContent = "Processing image...";
+    const formData = new FormData();
+    formData.append("myFile", file);
+    formData.append("settings", JSON.stringify({ featureA: check1.checked, featureB: check2.checked }));
 
-      const settings = {
-        featureA: check1.checked,
-        featureB: check2.checked,
-      };
-      formData.append("settings", JSON.stringify(settings));
-
-      fetch(`${API_BASE_URL}/upload-endpoint`, { [cite: 2]
-        method: "POST",
-        body: formData,
-      })
-      .then(response => {
-        if (!response.ok) throw new Error("Network response was not ok");
-        return response.blob(); 
-      })
-      .then(imageBlob => {
-        const imageUrl = URL.createObjectURL(imageBlob);
-        const link = document.createElement('a');
-        link.href = imageUrl;
-        const baseName = file.name.replace(/\.[^/.]+$/, "");
-        link.download = baseName + "_illuminated.png";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(imageUrl);
-        statusMessage.textContent = "Processing complete! Download started.";
-      })
-      .catch(error => {
-        console.error("Error:", error);
-        statusMessage.textContent = "Upload failed. Check console for details.";
-      });
-    } else {
-      statusMessage.textContent = "Please select a file first.";
-    }
+    fetch(`${API_BASE_URL}/upload-endpoint`, { method: "POST", body: formData })
+    .then(res => res.ok ? res.blob() : Promise.reject())
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = "illuminated.png";
+      a.click();
+      statusMessage.textContent = "Download complete!";
+    })
+    .catch(() => { statusMessage.textContent = "Error processing image."; });
   });
 });
