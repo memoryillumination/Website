@@ -184,7 +184,7 @@ def apply_watermark(image_bytes):
     else:
         alpha = logo_alpha
 
-    alpha = alpha.point(lambda x: int(x * 0.40))
+    alpha = alpha.point(lambda x: int(x * 0.12))
 
     watermark = Image.new("RGBA", logo.size, (0, 0, 0, 0))
     watermark.putalpha(alpha)
