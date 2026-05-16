@@ -168,27 +168,28 @@ def login():
         except VerifyMismatchError: pass
     return jsonify({"error": "Unauthorized"}), 401
 
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "MI_LOGO_Final.jpg")
+WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_Watermark.png")
 
 def apply_watermark(image_bytes):
     output = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
 
-    logo = Image.open(LOGO_PATH).convert("L")
-    logo_w = int(output.width * 0.45)
-    logo_h = int(logo.height * logo_w / logo.width)
-    logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
+    logo = Image.open(WATERMARK_PATH).convert("RGBA")
+    logo = logo.resize(output.size, Image.LANCZOS)
 
-    # Invert so dark logo lines become high-alpha, white background becomes transparent
-    alpha = ImageOps.invert(logo)
-    # 20% opacity on the dark areas
-    alpha = alpha.point(lambda x: int(x * 0.20))
+    # If PNG has no transparency, derive alpha from inverted luminance so the
+    # white background disappears and dark lines stay visible
+    logo_alpha = logo.split()[3]
+    if logo_alpha.getextrema() == (255, 255):
+        alpha = ImageOps.invert(logo.convert("L"))
+    else:
+        alpha = logo_alpha
+
+    alpha = alpha.point(lambda x: int(x * 0.40))
 
     watermark = Image.new("RGBA", logo.size, (0, 0, 0, 0))
     watermark.putalpha(alpha)
 
-    x = (output.width  - logo_w) // 2
-    y = (output.height - logo_h) // 2
-    output.paste(watermark, (x, y), watermark)
+    output.paste(watermark, (0, 0), watermark)
 
     buf = io.BytesIO()
     output.save(buf, format="PNG")
