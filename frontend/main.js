@@ -57,7 +57,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const check2 = document.querySelector("#check-option-2");
   const toRegisterBtn = document.querySelector("#to-register-btn");
 
-  const API_BASE_URL = "https://api.memory-illumination.com";
+  const API_BASE_URL = "https://api.memoryillumination.com";
   let sessionToken = "";
 
   function showHome() {
