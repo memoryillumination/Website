@@ -23,7 +23,7 @@ if ("requestIdleCallback" in window) {
 }
 
 // Fade fallback for browsers without native MPA View Transitions (non-Chrome 126+)
-if (!CSS.supports("selector(@view-transition)")) {
+if (!CSS.supports("view-transition-name: none")) {
   document.body.style.transition = "opacity 200ms ease";
 
   // Fade in on arrival
