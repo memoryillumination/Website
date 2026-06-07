@@ -1,7 +1,7 @@
 import os, io, cv2, json, modal, sqlite3
 import numpy as np
 from PIL import Image, ImageOps
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from flask_mail import Mail, Message
 from argon2 import PasswordHasher
@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
 
 # Config
 app.config.update(
@@ -164,9 +164,33 @@ def login():
         try:
             if ph.verify(user['password_hash'], data.get('password')):
                 token = serializer.dumps(data.get('username'), salt='session')
-                return jsonify({"token": token}), 200
+                response = make_response(jsonify({"success": True}), 200)
+                response.set_cookie(
+                    "session",
+                    value=token,
+                    max_age=604800,
+                    secure=True,
+                    httponly=True,
+                    samesite="Lax",
+                    domain=".memoryillumination.com"
+                )
+                return response
         except VerifyMismatchError: pass
     return jsonify({"error": "Unauthorized"}), 401
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    response = make_response(jsonify({"success": True}), 200)
+    response.set_cookie(
+        "session",
+        value="",
+        max_age=0,
+        secure=True,
+        httponly=True,
+        samesite="Lax",
+        domain=".memoryillumination.com"
+    )
+    return response
 
 WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_Watermark.png")
 
@@ -200,13 +224,13 @@ def apply_watermark(image_bytes):
 def upload_file():
     file     = request.files['myFile']
     settings = json.loads(request.form.get('settings', '{}'))
-    token    = request.form.get('token', '')
+    token    = request.cookies.get('session', '')
     input_data = file.read()
 
     # Verify the signed session token and look up the user's tier
     is_free_tier = False
     try:
-        username = serializer.loads(token, salt='session', max_age=86400)
+        username = serializer.loads(token, salt='session', max_age=604800)
         conn = get_db_connection()
         user = conn.execute(
             "SELECT subscription_tier_id FROM users WHERE username = ?", (username,)

@@ -1,0 +1,20 @@
+/*
+ * Minimal styles.css — only what Tailwind cannot handle:
+ * FAQ accordion open/close controlled by faq.js toggling .faq-item.open
+ * and aria-expanded on .faq-question.
+ *
+ * faq.js adds/removes the class "open" on .faq-item
+ * and sets aria-expanded="true/false" on .faq-question.
+ * The .faq-answer elements use Tailwind's "hidden" class by default;
+ * this file overrides that when the parent has .open.
+ */
+
+/* Show the answer when the accordion item is open */
+.faq-item.open .faq-answer {
+  display: block;
+}
+
+/* Rotate the +/- icon when expanded */
+.faq-question[aria-expanded="true"] .faq-icon {
+  transform: rotate(45deg);
+}
