@@ -1,3 +1,30 @@
+// iOS photos are HEIC by default, which OpenCV on the server can't decode.
+// Drawing through a canvas lets the browser decode any format it supports
+// (including HEIC on Safari) and exports a JPEG the server can always handle.
+function normalizeToJpeg(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      URL.revokeObjectURL(objectUrl);
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("canvas conversion failed"))),
+        "image/jpeg",
+        0.92,
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("could not load image"));
+    };
+    img.src = objectUrl;
+  });
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   const username = sessionStorage.getItem("username");
 
@@ -26,14 +53,22 @@ window.addEventListener("DOMContentLoaded", () => {
     if (check2.checked) check1.checked = false;
   });
 
-  uploadForm.addEventListener("submit", (e) => {
+  uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const file = fileInput.files[0];
     if (!file) return (statusMessage.textContent = "Select a file.");
 
+    statusMessage.textContent = "Preparing image...";
+    let imageBlob;
+    try {
+      imageBlob = await normalizeToJpeg(file);
+    } catch {
+      return (statusMessage.textContent = "Could not read that image. Please try a different file.");
+    }
+
     statusMessage.textContent = "Processing image...";
     const formData = new FormData();
-    formData.append("myFile", file);
+    formData.append("myFile", imageBlob, "upload.jpg");
     formData.append("settings", JSON.stringify({ featureA: check1.checked, featureB: check2.checked }));
 
     fetch(`${API_BASE_URL}/upload-endpoint`, { method: "POST", credentials: "include", body: formData })
