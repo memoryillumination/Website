@@ -12,44 +12,92 @@
     <script src="../js/register.js" defer></script>
   </head>
   <body class="bg-[#f6f6f6] text-[#0f0f0f] font-[&quot;Nunito&quot;,Helvetica,Arial,sans-serif] antialiased">
-
-    <header class="fixed top-0 left-0 right-0 z-[100] bg-white border-b border-[#e5e5e5] h-14 dark:bg-[#1a1a1a] dark:border-[#3a3a3a]">
+    <header
+      class="fixed top-0 left-0 right-0 z-[100] bg-white border-b border-[#e5e5e5] h-14 dark:bg-[#1a1a1a] dark:border-[#3a3a3a]"
+    >
       <div class="max-w-[1100px] mx-auto px-6 h-full flex items-center justify-between">
-        <a href="index.html" class="font-semibold text-[1.1em] text-[#0f0f0f] no-underline select-none dark:text-[#f6f6f6]">Memory Illumination</a>
+        <a
+          href="index.html"
+          class="font-semibold text-[1.1em] text-[#0f0f0f] no-underline select-none dark:text-[#f6f6f6]"
+          >Memory Illumination</a
+        >
         <nav class="flex gap-3 items-center">
-          <a href="about.html" class="text-[0.9em] font-medium text-[#0f0f0f] no-underline px-2 py-1 hover:text-[#007bff] dark:text-[#f6f6f6]">About</a>
-          <a href="faq.html" class="text-[0.9em] font-medium text-[#0f0f0f] no-underline px-2 py-1 hover:text-[#007bff] dark:text-[#f6f6f6]">FAQ</a>
-          <a href="login.html" class="inline-block px-[1.1em] py-[0.4em] text-[0.9em] font-medium rounded-lg border border-[#007bff] bg-transparent text-[#007bff] no-underline hover:bg-[#007bff] hover:text-white dark:border-[#5b9cf6] dark:text-[#5b9cf6] dark:hover:bg-[#5b9cf6] dark:hover:text-white">Login</a>
-          <a href="register.html" class="inline-block px-[1.1em] py-[0.4em] text-[0.9em] font-medium rounded-lg border border-[#007bff] bg-[#007bff] text-white no-underline cursor-default">Register</a>
+          <a
+            href="about.html"
+            class="text-[0.9em] font-medium text-[#0f0f0f] no-underline px-2 py-1 hover:text-[#007bff] dark:text-[#f6f6f6]"
+            >About</a
+          >
+          <a
+            href="faq.html"
+            class="text-[0.9em] font-medium text-[#0f0f0f] no-underline px-2 py-1 hover:text-[#007bff] dark:text-[#f6f6f6]"
+            >FAQ</a
+          >
+          <a
+            href="login.html"
+            class="inline-block px-[1.1em] py-[0.4em] text-[0.9em] font-medium rounded-lg border border-[#007bff] bg-transparent text-[#007bff] no-underline hover:bg-[#007bff] hover:text-white dark:border-[#5b9cf6] dark:text-[#5b9cf6] dark:hover:bg-[#5b9cf6] dark:hover:text-white"
+            >Login</a
+          >
+          <a
+            href="register.html"
+            class="inline-block px-[1.1em] py-[0.4em] text-[0.9em] font-medium rounded-lg border border-[#007bff] bg-[#007bff] text-white no-underline cursor-default"
+            >Register</a
+          >
         </nav>
       </div>
     </header>
 
     <main class="mx-auto px-4 pt-14 pb-8 flex flex-col justify-center text-center max-w-[500px] min-h-screen">
-      <form id="register-form" class="flex flex-col gap-5 p-8 rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.07)] bg-white dark:bg-[#3a3a3a] dark:shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
+      <form
+        id="register-form"
+        class="flex flex-col gap-5 p-8 rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.07)] bg-white dark:bg-[#3a3a3a] dark:shadow-[0_4px_16px_rgba(0,0,0,0.2)]"
+      >
         <h3 class="text-lg font-semibold m-0">Register</h3>
         <div class="flex w-full text-left gap-2">
-          <input id="reg-username-input" placeholder="Email" required
-            class="w-full rounded-lg border border-[#ccc] px-[1.2em] py-[0.6em] text-[1em] bg-white transition-[border-color] duration-[0.25s] focus:outline-none focus:border-[#396cd8] box-border dark:bg-[#2f2f2f] dark:border-[#555]" />
+          <input
+            id="reg-username-input"
+            placeholder="Email"
+            required
+            class="w-full rounded-lg border border-[#ccc] px-[1.2em] py-[0.6em] text-[1em] bg-white transition-[border-color] duration-[0.25s] focus:outline-none focus:border-[#396cd8] box-border dark:bg-[#2f2f2f] dark:border-[#555]"
+          />
         </div>
         <div class="flex w-full text-left gap-2">
-          <input id="reg-password-input" type="password" placeholder="Password" required
-            class="w-full rounded-lg border border-[#ccc] px-[1.2em] py-[0.6em] text-[1em] bg-white transition-[border-color] duration-[0.25s] focus:outline-none focus:border-[#396cd8] box-border dark:bg-[#2f2f2f] dark:border-[#555]" />
+          <input
+            id="reg-password-input"
+            type="password"
+            placeholder="Password"
+            required
+            class="w-full rounded-lg border border-[#ccc] px-[1.2em] py-[0.6em] text-[1em] bg-white transition-[border-color] duration-[0.25s] focus:outline-none focus:border-[#396cd8] box-border dark:bg-[#2f2f2f] dark:border-[#555]"
+          />
         </div>
         <div class="flex flex-col gap-[0.6em] text-left">
           <label class="flex items-start gap-[0.6em] text-[0.85em] text-[#444] cursor-pointer">
             <input type="checkbox" id="agree-privacy" required class="mt-[0.15em] shrink-0 w-auto m-0" />
-            <span>I have read and agree to the <a href="privacy.html" data-modal="privacy" class="text-[#007bff] hover:text-[#0056b3]">Privacy Policy</a></span>
+            <span
+              >I have read and agree to the
+              <a href="privacy.html" data-modal="privacy" class="text-[#007bff] hover:text-[#0056b3]"
+                >Privacy Policy</a
+              ></span
+            >
           </label>
           <label class="flex items-start gap-[0.6em] text-[0.85em] text-[#444] cursor-pointer">
             <input type="checkbox" id="agree-tos" required class="mt-[0.15em] shrink-0 w-auto m-0" />
-            <span>I have read and agree to the <a href="tos.html" data-modal="tos" class="text-[#007bff] hover:text-[#0056b3]">Terms of Service</a></span>
+            <span
+              >I have read and agree to the
+              <a href="tos.html" data-modal="tos" class="text-[#007bff] hover:text-[#0056b3]">Terms of Service</a></span
+            >
           </label>
         </div>
-        <button type="submit"
-          class="w-full rounded-lg border border-[#007bff] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#007bff] text-white cursor-pointer hover:bg-[#0056b3] hover:border-[#0056b3] active:bg-[#004a99] active:border-[#004a99] box-border">Register</button>
-        <a href="login.html"
-          class="w-full rounded-lg border border-[#6c757d] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#6c757d] text-white no-underline text-center hover:bg-[#5a6268] hover:border-[#545b62] box-border">Already have an account? Login</a>
+        <button
+          type="submit"
+          class="w-full rounded-lg border border-[#007bff] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#007bff] text-white cursor-pointer hover:bg-[#0056b3] hover:border-[#0056b3] active:bg-[#004a99] active:border-[#004a99] box-border"
+        >
+          Register
+        </button>
+        <a
+          href="login.html"
+          class="w-full rounded-lg border border-[#6c757d] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#6c757d] text-white no-underline text-center hover:bg-[#5a6268] hover:border-[#545b62] box-border"
+          >Already have an account? Login</a
+        >
       </form>
       <p id="status-message" class="mt-4 font-bold min-h-6"></p>
     </main>
@@ -57,13 +105,19 @@
     <!-- Policy Modal -->
     <div id="policy-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
       <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col dark:bg-[#2f2f2f]">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-[#e5e5e5] flex-shrink-0 dark:border-[#555]">
+        <div
+          class="flex items-center justify-between px-6 py-4 border-b border-[#e5e5e5] flex-shrink-0 dark:border-[#555]"
+        >
           <h2 id="modal-title" class="text-lg font-semibold m-0"></h2>
-          <button id="modal-close" class="text-[#6c757d] hover:text-[#0f0f0f] text-3xl leading-none cursor-pointer bg-transparent border-none p-0 dark:hover:text-white">&times;</button>
+          <button
+            id="modal-close"
+            class="text-[#6c757d] hover:text-[#0f0f0f] text-3xl leading-none cursor-pointer bg-transparent border-none p-0 dark:hover:text-white"
+          >
+            &times;
+          </button>
         </div>
         <div id="modal-body" class="overflow-y-auto px-6 py-4 flex-1 text-left"></div>
       </div>
     </div>
-
   </body>
 </html>
