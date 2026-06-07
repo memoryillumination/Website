@@ -1,7 +1,7 @@
 // --- Policy Modal ---
 const policyModal = document.getElementById("policy-modal");
-const modalTitle  = document.getElementById("modal-title");
-const modalBody   = document.getElementById("modal-body");
+const modalTitle = document.getElementById("modal-title");
+const modalBody = document.getElementById("modal-body");
 
 function openModal(url, title) {
   modalTitle.textContent = title;
@@ -10,13 +10,13 @@ function openModal(url, title) {
   document.body.style.overflow = "hidden";
 
   fetch(url)
-    .then(r => r.text())
-    .then(html => {
+    .then((r) => r.text())
+    .then((html) => {
       const doc = new DOMParser().parseFromString(html, "text/html");
       const main = doc.querySelector("main");
       // Drop the page-level h1 and subtitle — modal header already shows the title
       main.querySelector("h1")?.remove();
-      main.querySelectorAll("p.text-center").forEach(el => el.remove());
+      main.querySelectorAll("p.text-center").forEach((el) => el.remove());
       modalBody.innerHTML = main.innerHTML;
     })
     .catch(() => {
@@ -30,16 +30,20 @@ function closeModal() {
 }
 
 document.getElementById("modal-close").addEventListener("click", closeModal);
-policyModal.addEventListener("click", e => { if (e.target === policyModal) closeModal(); });
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+policyModal.addEventListener("click", (e) => {
+  if (e.target === policyModal) closeModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeModal();
+});
 
-document.querySelectorAll("[data-modal]").forEach(link => {
-  link.addEventListener("click", e => {
+document.querySelectorAll("[data-modal]").forEach((link) => {
+  link.addEventListener("click", (e) => {
     e.preventDefault();
     const type = link.dataset.modal;
     openModal(
       type === "privacy" ? "privacy.html" : "tos.html",
-      type === "privacy" ? "Privacy Policy" : "Terms of Service"
+      type === "privacy" ? "Privacy Policy" : "Terms of Service",
     );
   });
 });
@@ -101,8 +105,12 @@ window.addEventListener("DOMContentLoaded", () => {
     statusMessage.textContent = "";
   });
 
-check1.addEventListener('change', () => { if (check1.checked) check2.checked = false; });
-  check2.addEventListener('change', () => { if (check2.checked) check1.checked = false; });
+  check1.addEventListener("change", () => {
+    if (check1.checked) check2.checked = false;
+  });
+  check2.addEventListener("change", () => {
+    if (check2.checked) check1.checked = false;
+  });
 
   // Register
   registerForm.addEventListener("submit", (e) => {
@@ -116,13 +124,15 @@ check1.addEventListener('change', () => { if (check1.checked) check2.checked = f
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     })
-    .then(res => res.ok ? res.json() : Promise.reject())
-    .then(() => {
-      registerForm.style.display = "none";
-      loginForm.style.display = "flex";
-      statusMessage.textContent = "Success! Please check your email to activate.";
-    })
-    .catch(() => { statusMessage.textContent = "Registration failed. Try again."; });
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then(() => {
+        registerForm.style.display = "none";
+        loginForm.style.display = "flex";
+        statusMessage.textContent = "Success! Please check your email to activate.";
+      })
+      .catch(() => {
+        statusMessage.textContent = "Registration failed. Try again.";
+      });
   });
 
   // Login
@@ -136,21 +146,23 @@ check1.addEventListener('change', () => { if (check1.checked) check2.checked = f
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     })
-    .then(res => res.ok ? res.json() : Promise.reject())
-    .then(data => {
-      sessionToken = data.token;
-      loginForm.style.display = "none";
-      uploadForm.style.display = "flex";
-      statusMessage.textContent = `Welcome, ${username}!`;
-    })
-    .catch(() => { statusMessage.textContent = "Login failed. Verify email or check credentials."; });
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((data) => {
+        sessionToken = data.token;
+        loginForm.style.display = "none";
+        uploadForm.style.display = "flex";
+        statusMessage.textContent = `Welcome, ${username}!`;
+      })
+      .catch(() => {
+        statusMessage.textContent = "Login failed. Verify email or check credentials.";
+      });
   });
 
   // Upload
   uploadForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const file = fileInput.files[0];
-    if (!file) return statusMessage.textContent = "Select a file.";
+    if (!file) return (statusMessage.textContent = "Select a file.");
 
     statusMessage.textContent = "Processing image...";
     const formData = new FormData();
@@ -159,15 +171,17 @@ check1.addEventListener('change', () => { if (check1.checked) check2.checked = f
     formData.append("token", sessionToken);
 
     fetch(`${API_BASE_URL}/upload-endpoint`, { method: "POST", body: formData })
-    .then(res => res.ok ? res.blob() : Promise.reject())
-    .then(blob => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = "illuminated.png";
-      a.click();
-      statusMessage.textContent = "Download complete!";
-    })
-    .catch(() => { statusMessage.textContent = "Error processing image."; });
+      .then((res) => (res.ok ? res.blob() : Promise.reject()))
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "illuminated.png";
+        a.click();
+        statusMessage.textContent = "Download complete!";
+      })
+      .catch(() => {
+        statusMessage.textContent = "Error processing image.";
+      });
   });
 });

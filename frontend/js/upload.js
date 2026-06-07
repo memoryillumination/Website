@@ -19,8 +19,12 @@ window.addEventListener("DOMContentLoaded", () => {
   const check1 = document.querySelector("#check-option-1");
   const check2 = document.querySelector("#check-option-2");
 
-  check1.addEventListener("change", () => { if (check1.checked) check2.checked = false; });
-  check2.addEventListener("change", () => { if (check2.checked) check1.checked = false; });
+  check1.addEventListener("change", () => {
+    if (check1.checked) check2.checked = false;
+  });
+  check2.addEventListener("change", () => {
+    if (check2.checked) check1.checked = false;
+  });
 
   uploadForm.addEventListener("submit", (e) => {
     e.preventDefault();

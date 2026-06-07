@@ -42,7 +42,7 @@ document.querySelectorAll("[data-modal]").forEach((link) => {
     const type = link.dataset.modal;
     openModal(
       type === "privacy" ? "privacy.html" : "tos.html",
-      type === "privacy" ? "Privacy Policy" : "Terms of Service"
+      type === "privacy" ? "Privacy Policy" : "Terms of Service",
     );
   });
 });
