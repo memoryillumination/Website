@@ -6,35 +6,29 @@
     <link rel="stylesheet" href="css/styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FAQ — Memory Illumination</title>
     <script src="js/transitions.js" defer></script>
     <script src="js/faq.js" defer></script>
   </head>
-  <body class="bg-[#f6f6f6] text-[#0f0f0f] font-[&quot;Nunito&quot;,Helvetica,Arial,sans-serif] antialiased">
+  <body class="bg-[#f6f6f6] text-[#0f0f0f] antialiased">
     <!-- Fixed Header -->
-    <header
-      class="fixed top-0 left-0 right-0 z-[100] bg-white border-b border-[#e5e5e5] h-14 dark:bg-[#1a1a1a] dark:border-[#3a3a3a]"
-    >
+    <header class="fixed top-0 left-0 right-0 z-[100] bg-white border-b border-[#e5e5e5] h-14">
       <div class="max-w-[1100px] mx-auto px-6 h-full flex items-center justify-between">
-        <a
-          href="index.html"
-          class="font-semibold text-[1.1em] text-[#0f0f0f] no-underline select-none dark:text-[#f6f6f6]"
+        <a href="index.html" class="font-semibold text-[1.1em] text-[#0f0f0f] no-underline select-none"
           >Memory Illumination</a
         >
         <nav class="flex gap-3 items-center">
           <a
             href="about.html"
-            class="text-[0.9em] font-medium text-[#0f0f0f] no-underline px-2 py-1 hover:text-[#007bff] dark:text-[#f6f6f6]"
+            class="text-[0.9em] font-medium text-[#0f0f0f] no-underline px-2 py-1 hover:text-[#007bff]"
             >About</a
           >
-          <a href="faq.html" class="text-[0.9em] font-medium text-[#007bff] no-underline px-2 py-1 dark:text-[#5b9cf6]"
-            >FAQ</a
-          >
+          <a href="faq.html" class="text-[0.9em] font-medium text-[#007bff] no-underline px-2 py-1">FAQ</a>
+          <!--
           <a
             href="login.html"
-            class="inline-block px-[1.1em] py-[0.4em] text-[0.9em] font-medium rounded-lg border border-[#007bff] bg-transparent text-[#007bff] no-underline hover:bg-[#007bff] hover:text-white dark:border-[#5b9cf6] dark:text-[#5b9cf6] dark:hover:bg-[#5b9cf6] dark:hover:text-white"
+            class="inline-block px-[1.1em] py-[0.4em] text-[0.9em] font-medium rounded-lg border border-[#007bff] bg-transparent text-[#007bff] no-underline hover:bg-[#007bff] hover:text-white"
             >Login</a
           >
           <a
@@ -42,6 +36,7 @@
             class="inline-block px-[1.1em] py-[0.4em] text-[0.9em] font-medium rounded-lg border border-[#007bff] bg-[#007bff] text-white no-underline hover:bg-[#0056b3] hover:border-[#0056b3]"
             >Register</a
           >
+          -->
         </nav>
       </div>
     </header>
@@ -51,11 +46,9 @@
       <h1 class="text-[2em] font-bold m-0 mb-6 text-center">Frequently Asked Questions</h1>
 
       <div class="flex flex-col gap-3">
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             What is Memory Illumination?
@@ -65,18 +58,16 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               Memory Illumination is a personalized art engagement activity for individuals with cognitive impairment.
               Memory Illumination uses AI to generate sketches or coloring pages from uploaded photographs.
             </p>
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             What programs do you offer?
@@ -86,8 +77,8 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">We offer four program levels:</p>
-            <ul class="mt-2 text-[#444] leading-[1.6] pl-5 list-disc dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">We offer four program levels:</p>
+            <ul class="mt-2 text-[#444] leading-[1.6] pl-5 list-disc">
               <li><strong>Sample</strong> — Our free level where you can try out the photo conversion.</li>
               <li><strong>Introductory</strong> — Purchase includes the Memory Illumination Outline.</li>
               <li>
@@ -102,11 +93,9 @@
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             How do you handle my photographs?
@@ -116,7 +105,7 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               Memory Illumination uses advanced algorithms to create unique, detailed outlines that are perfect for
               coloring. Your photographs are temporarily stored on our secure servers only during processing. Original
               images are automatically deleted immediately after your sketch or coloring page is generated.
@@ -124,11 +113,9 @@
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             How do you handle my data?
@@ -138,23 +125,21 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               We take data privacy seriously. Memory Illumination only collects information necessary to provide our
               services and we never sell or share your personal data with third parties. For detailed information about
               our data practices, please review our
               <a href="privacy.html" class="text-[#007bff] hover:text-[#0056b3]">Privacy Policy</a>.
             </p>
-            <p class="mt-2 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="mt-2 text-[#444] leading-[1.6]">
               Data is used for account creation and identification, which we do not share with third parties.
             </p>
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             What data do you share with third parties?
@@ -164,7 +149,7 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               Memory Illumination shares minimal necessary data with third-party services. Raw image data is sent to
               Modal.com for AI generation, before being returned to us. All traffic is encrypted, and Modal.com does not
               have access to customer photos at any point.
@@ -172,11 +157,9 @@
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             What are my data rights?
@@ -186,11 +169,11 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               Your data protection rights are covered by the CCPA (California Consumer Privacy Act). Depending on your
               location, you may have certain rights regarding your personal information, including the right to:
             </p>
-            <ul class="mt-2 text-[#444] leading-[1.6] pl-5 list-disc dark:text-[#ccc]">
+            <ul class="mt-2 text-[#444] leading-[1.6] pl-5 list-disc">
               <li>Export your sketches and coloring pages.</li>
               <li>
                 Access your personal data and request correction of inaccurate or incomplete data, or update your
@@ -198,21 +181,19 @@
               </li>
               <li>Delete your account via the Account deletion page.</li>
             </ul>
-            <p class="mt-2 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="mt-2 text-[#444] leading-[1.6]">
               We may request verification of your identity before responding to such requests.
             </p>
-            <p class="mt-2 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="mt-2 text-[#444] leading-[1.6]">
               Your personal information may also be disclosed when required by law, or necessary to protect the rights,
               property, or safety of Memory Illumination, our customers, or others.
             </p>
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             What security measures do you use?
@@ -222,7 +203,7 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               We use data encryption to securely store your user account details and information. We utilize
               best-in-class HaaS hosting infrastructure for high reliability, and implement regular security updates to
               make sure we are protected from known vulnerabilities.
@@ -230,11 +211,9 @@
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             Do you use cookies?
@@ -244,17 +223,15 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               Memory Illumination employs cookies exclusively for session management.
             </p>
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             Is Memory Illumination suitable for children?
@@ -264,17 +241,15 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               Memory Illumination is intended for adult use. Users under 13 must obtain parental or guardian consent.
             </p>
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             Can your policies change?
@@ -284,17 +259,15 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               Memory Illumination reserves the right to modify this policy and will notify users of significant changes.
             </p>
           </div>
         </div>
 
-        <div
-          class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white dark:border-[#3a3a3a] dark:bg-[#2f2f2f]"
-        >
+        <div class="faq-item border border-[#e5e5e5] rounded-lg overflow-hidden bg-white">
           <button
-            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7] dark:bg-[#2f2f2f] dark:text-[#f6f6f6] dark:hover:bg-[#3a3a3a]"
+            class="faq-question w-full flex justify-between items-center px-5 py-4 bg-white text-[#0f0f0f] border-none text-[1em] font-medium text-left cursor-pointer transition-[background-color] duration-[0.15s] hover:bg-[#f0f0f0] aria-expanded:bg-[#f7f7f7]"
             aria-expanded="false"
           >
             How can I contact you?
@@ -304,7 +277,7 @@
             >
           </button>
           <div class="faq-answer hidden px-5 pb-4 text-left">
-            <p class="m-0 text-[#444] leading-[1.6] dark:text-[#ccc]">
+            <p class="m-0 text-[#444] leading-[1.6]">
               We're here to help! If you have any questions about the terms or need clarification on any policies, don't
               hesitate to reach out to our support team at
               <a href="mailto:memoryillumination@gmail.com" class="text-[#007bff] hover:text-[#0056b3]"

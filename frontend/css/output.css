@@ -1,10 +1,10 @@
 /*! tailwindcss v4.3.0 | MIT License | https://tailwindcss.com */
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Cabin:wght@400;500;600;700&display=swap");
 @layer properties;
 @layer theme, base, components, utilities;
 @layer theme {
   :root, :host {
-    --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
-      "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    --font-sans: "Noto Sans", Helvetica, Arial, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
       "Courier New", monospace;
     --color-red-500: oklch(63.7% 0.237 25.331);
@@ -26,6 +26,7 @@
     --default-transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
     --default-font-family: var(--font-sans);
     --default-mono-font-family: var(--font-mono);
+    --font-heading: "Cabin", Helvetica, Arial, sans-serif;
   }
 }
 @layer base {
@@ -726,94 +727,9 @@
       background-color: #f7f7f7;
     }
   }
-  .dark\:border-\[\#3a3a3a\] {
-    @media (prefers-color-scheme: dark) {
-      border-color: #3a3a3a;
-    }
-  }
-  .dark\:border-\[\#5b9cf6\] {
-    @media (prefers-color-scheme: dark) {
-      border-color: #5b9cf6;
-    }
-  }
-  .dark\:border-\[\#555\] {
-    @media (prefers-color-scheme: dark) {
-      border-color: #555;
-    }
-  }
-  .dark\:border-\[\#aaa\] {
-    @media (prefers-color-scheme: dark) {
-      border-color: #aaa;
-    }
-  }
-  .dark\:bg-\[\#1a1a1a\] {
-    @media (prefers-color-scheme: dark) {
-      background-color: #1a1a1a;
-    }
-  }
-  .dark\:bg-\[\#2f2f2f\] {
-    @media (prefers-color-scheme: dark) {
-      background-color: #2f2f2f;
-    }
-  }
-  .dark\:bg-\[\#3a3a3a\] {
-    @media (prefers-color-scheme: dark) {
-      background-color: #3a3a3a;
-    }
-  }
-  .dark\:text-\[\#5b9cf6\] {
-    @media (prefers-color-scheme: dark) {
-      color: #5b9cf6;
-    }
-  }
-  .dark\:text-\[\#aaa\] {
-    @media (prefers-color-scheme: dark) {
-      color: #aaa;
-    }
-  }
-  .dark\:text-\[\#ccc\] {
-    @media (prefers-color-scheme: dark) {
-      color: #ccc;
-    }
-  }
-  .dark\:text-\[\#f6f6f6\] {
-    @media (prefers-color-scheme: dark) {
-      color: #f6f6f6;
-    }
-  }
-  .dark\:shadow-\[0_4px_16px_rgba\(0\,0\,0\,0\.2\)\] {
-    @media (prefers-color-scheme: dark) {
-      --tw-shadow: 0 4px 16px var(--tw-shadow-color, rgba(0,0,0,0.2));
-      box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
-    }
-  }
-  .dark\:hover\:bg-\[\#3a3a3a\] {
-    @media (prefers-color-scheme: dark) {
-      &:hover {
-        @media (hover: hover) {
-          background-color: #3a3a3a;
-        }
-      }
-    }
-  }
-  .dark\:hover\:bg-\[\#5b9cf6\] {
-    @media (prefers-color-scheme: dark) {
-      &:hover {
-        @media (hover: hover) {
-          background-color: #5b9cf6;
-        }
-      }
-    }
-  }
-  .dark\:hover\:text-white {
-    @media (prefers-color-scheme: dark) {
-      &:hover {
-        @media (hover: hover) {
-          color: var(--color-white);
-        }
-      }
-    }
-  }
+}
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
 }
 @view-transition {
   navigation: auto;
