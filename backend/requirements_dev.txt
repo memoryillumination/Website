@@ -1,3 +1,7 @@
+# Local development: runs app.py (APP_ENV unset/development) alongside the
+# local GPU worker (backend/flux_1_kontext.py) on the same machine, so this
+# includes the full inference stack in addition to the web server deps.
+
 # --- Intel Hardware Acceleration Index ---
 --extra-index-url https://download.pytorch.org/whl/xpu
 
@@ -11,9 +15,8 @@ numpy>=1.26.0
 opencv-python-headless>=4.9.0.80  # Headless avoids unnecessary X11/GUI dependencies in a server VM
 pillow-heif>=0.18.0        # HEIC/HEIF decoding (iPhone default photo format)
 pillow-avif-plugin>=1.4.0  # AVIF decoding (Android/Chrome default in some flows)
-modal>=1.2.3                # Only required when APP_ENV=production (routes featureB to the Modal GPU worker)
 
-# --- AI Inference Stack (local_worker.py) ---
+# --- AI Inference Stack (flux_1_kontext.py) ---
 torch
 torchvision
 torchaudio

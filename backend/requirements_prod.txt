@@ -1,0 +1,16 @@
+# Production host running app.py with APP_ENV=production. GPU inference is
+# offloaded to the Modal-hosted worker (backend/flux_1_kontext_modal.py), so
+# this host never loads torch/diffusers/etc. locally — Modal builds its own
+# container image for that from the pip_install() list inside that file.
+
+Flask>=3.0.0
+Flask-CORS>=4.0.0
+Flask-Mail>=0.9.1
+argon2-cffi>=23.1.0
+python-dotenv>=1.0.1
+numpy>=1.26.0
+opencv-python-headless>=4.9.0.80  # Headless avoids unnecessary X11/GUI dependencies in a server VM
+Pillow>=10.3.0
+pillow-heif>=0.18.0        # HEIC/HEIF decoding (iPhone default photo format)
+pillow-avif-plugin>=1.4.0  # AVIF decoding (Android/Chrome default in some flows)
+modal>=1.2.3                # Client library to dispatch featureB to the Modal GPU worker
