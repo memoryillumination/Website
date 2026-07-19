@@ -6,6 +6,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const API_BASE_URL = "https://api.memoryillumination.com";
 
+  // Tour trigger disabled for now — still sandboxing the tooltip UI.
+  // if (sessionStorage.getItem("newUser") === "1") {
+  //   sessionStorage.removeItem("newUser");
+  //   startTour(UPLOAD_TOUR_STEPS, { apiBaseUrl: API_BASE_URL });
+  // }
+
   document.querySelector("#logout-btn").addEventListener("click", () => {
     fetch(`${API_BASE_URL}/logout`, { method: "POST", credentials: "include" }).finally(() => {
       sessionStorage.removeItem("username");

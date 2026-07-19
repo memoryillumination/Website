@@ -24,8 +24,9 @@ window.addEventListener("DOMContentLoaded", () => {
       body: JSON.stringify({ username, password }),
     })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then(() => {
+      .then((data) => {
         sessionStorage.setItem("username", username);
+        sessionStorage.setItem("newUser", data.newUser ? "1" : "0");
         window.location.href = "upload.html";
       })
       .catch(() => {
