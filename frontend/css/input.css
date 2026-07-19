@@ -33,6 +33,25 @@ h6 {
   font-family: var(--font-heading);
 }
 
+/* Native file input: the browser's "Choose File" button and the filename
+   text next to it render flush against each other with no styling */
+#file-input::file-selector-button,
+#file-input::-webkit-file-upload-button {
+  margin-right: 1em;
+  padding: 0.5em 1em;
+  border: none;
+  border-radius: 0.5em;
+  background: #007bff;
+  color: #fff;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+#file-input::file-selector-button:hover,
+#file-input::-webkit-file-upload-button:hover {
+  background: #0056b3;
+}
+
 /* MPA View Transitions — Chrome 126+ */
 @view-transition {
   navigation: auto;
