@@ -58,13 +58,18 @@ class ColoringModel:
 
     @modal.method()
     def process(self, image_bytes):
+        import time
         import torch
         from PIL import Image
+
+        t_start = time.perf_counter()
 
         # ... (Decode/Resize logic stays the same) ...
         init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         original_size = init_image.size
         input_image = init_image.resize((1024, 1024), Image.LANCZOS)
+
+        t_preprocess = time.perf_counter()
 
         prompt = "coloring book page, clean line art, black and white"
         negative_prompt = "color, shading, gradients, grayscale, photorealistic, 3d, rendering, shadows, noise, textured paper"
@@ -75,14 +80,26 @@ class ColoringModel:
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 image=input_image,
-                num_inference_steps=10, 
+                num_inference_steps=10,
                 guidance_scale=4,
                 generator=torch.Generator("cuda").manual_seed(42)
             ).images[0]
+
+        t_inference = time.perf_counter()
 
         # ... (Return logic stays the same) ...
         final_image = result.resize(original_size, Image.LANCZOS)
         buf = io.BytesIO()
         final_image.save(buf, format="PNG")
-        
+
+        t_postprocess = time.perf_counter()
+
+        print(
+            "⏱️  modal worker timing — "
+            f"preprocess: {t_preprocess - t_start:.3f}s, "
+            f"inference: {t_inference - t_preprocess:.3f}s, "
+            f"postprocess: {t_postprocess - t_inference:.3f}s, "
+            f"total: {t_postprocess - t_start:.3f}s"
+        )
+
         return {"flux_sketch": buf.getvalue()}
