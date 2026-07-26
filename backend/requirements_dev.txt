@@ -9,8 +9,11 @@
 Flask>=3.0.0
 Flask-CORS>=4.0.0
 Flask-Mail>=0.9.1
+uWSGI>=2.0.24
 argon2-cffi>=23.1.0
+itsdangerous>=2.2.0
 python-dotenv>=1.0.1
+requests>=2.31.0
 numpy>=1.26.0
 opencv-python-headless>=4.9.0.80  # Headless avoids unnecessary X11/GUI dependencies in a server VM
 pillow-heif>=0.18.0        # HEIC/HEIF decoding (iPhone default photo format)
