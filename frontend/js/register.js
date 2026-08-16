@@ -54,10 +54,16 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const API_BASE_URL = "https://api.memoryillumination.com";
 
+  const passwordInput = document.querySelector("#reg-password-input");
+  const showPassword = document.querySelector("#reg-show-password");
+  showPassword.addEventListener("change", () => {
+    passwordInput.type = showPassword.checked ? "text" : "password";
+  });
+
   registerForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const username = document.querySelector("#reg-username-input").value.trim().toLowerCase();
-    const password = document.querySelector("#reg-password-input").value;
+    const password = passwordInput.value;
     statusMessage.style.color = "";
     statusMessage.textContent = "Processing registration...";
 

@@ -25,6 +25,12 @@ window.addEventListener("DOMContentLoaded", () => {
     resendBtn.style.cursor = disabled ? "default" : "";
   };
 
+  const passwordInput = document.querySelector("#login-password-input");
+  const showPassword = document.querySelector("#login-show-password");
+  showPassword.addEventListener("change", () => {
+    passwordInput.type = showPassword.checked ? "text" : "password";
+  });
+
   // Show success message if arriving after registration
   if (new URLSearchParams(window.location.search).get("registered") === "1") {
     setStatus("Registration successful! Please check your email to activate your account.", "#28a745");
@@ -34,7 +40,7 @@ window.addEventListener("DOMContentLoaded", () => {
   loginForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const username = normalize(usernameInput.value);
-    const password = document.querySelector("#login-password-input").value;
+    const password = passwordInput.value;
     setStatus("Logging in...");
 
     fetch(`${API_BASE_URL}/login`, {
