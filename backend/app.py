@@ -8,7 +8,6 @@ import pillow_avif  # noqa: F401  (importing registers the AVIF plugin with Pill
 # any host built from requirements_prod.txt.
 # from rembg import remove as rembg_remove, new_session as rembg_new_session
 from flask import Flask, request, jsonify, send_file, make_response
-from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_cors import CORS
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -40,15 +39,6 @@ APP_ENV = os.environ.get('APP_ENV', 'development')
 WATERMARK_FREE_TIER = False
 
 app = Flask(__name__)
-
-# Nginx terminates TLS and proxies to uWSGI, so request.remote_addr is the
-# proxy itself — without this every caller would share one rate-limit bucket.
-# x_for=1 trusts exactly one hop, taking the address Nginx appended; trusting
-# more would let a client forge the chain and evade limits. Requires
-# `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in the Nginx
-# site config.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
-
 CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
 
 # Config
@@ -198,7 +188,20 @@ init_db()
 # --- RATE LIMITING ---
 
 def client_ip():
-    """Caller's address, as resolved by ProxyFix from Nginx's X-Forwarded-For."""
+    """
+    Caller's address.
+
+    Nginx reaches uWSGI over the uwsgi protocol (uwsgi_pass), and its
+    uwsgi_params sets REMOTE_ADDR to $remote_addr — the real client address,
+    since api.memoryillumination.com is a DNS-only record pointing straight at
+    the droplet with nothing proxying in front of it.
+
+    Deliberately does NOT consult X-Forwarded-For. Nginx never sets that header
+    here, so it would carry only whatever the client chose to send: anyone could
+    rotate it per request and walk straight through every rate limit. If a proxy
+    (e.g. Cloudflare) is ever put in front of this API, trust its specific
+    header instead of re-adding a blanket ProxyFix.
+    """
     return request.remote_addr or 'unknown'
 
 
