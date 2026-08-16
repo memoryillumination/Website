@@ -1,4 +1,4 @@
-import os, io, re, cv2, json, sqlite3
+import os, io, re, cv2, json, hmac, base64, hashlib, sqlite3
 import numpy as np
 from PIL import Image, ImageOps
 import pillow_heif
@@ -54,6 +54,12 @@ MAIL_FROM = os.environ.get('MAIL_FROM', 'Memory Illumination <noreply@mail.memor
 MAIL_REPLY_TO = os.environ.get('MAIL_REPLY_TO', 'support@memoryillumination.com')
 API_BASE_URL = os.environ.get('API_BASE_URL', 'https://api.memoryillumination.com')
 SITE_BASE_URL = os.environ.get('SITE_BASE_URL', 'https://memoryillumination.com')
+
+# Signing secret for the Resend webhook (Svix format, "whsec_..."). Without it
+# the webhook endpoint rejects everything — an unauthenticated suppression
+# endpoint would let anyone block delivery to any address.
+RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET')
+WEBHOOK_TOLERANCE = 300           # max age of a webhook timestamp, in seconds
 
 CONFIRM_TOKEN_MAX_AGE = 3600      # 1 hour, matches the copy in the email body
 CONFIRM_RESEND_WINDOW = 3600      # throttle window for confirmation sends
@@ -137,6 +143,18 @@ def init_db():
         ON confirmation_sends (email, sent_at)
     ''')
 
+    # Addresses we must stop mailing: hard bounces (the mailbox does not exist)
+    # and spam complaints. Kept separate from users so a suppression survives
+    # the account being deleted and re-created.
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS email_suppressions (
+            email      TEXT PRIMARY KEY,
+            reason     TEXT NOT NULL,
+            detail     TEXT,
+            created_at INTEGER NOT NULL
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -144,6 +162,67 @@ init_db()
 
 
 # --- EMAIL CONFIRMATION ---
+
+def is_email_suppressed(conn, email):
+    """True if this address hard-bounced or filed a spam complaint."""
+    return conn.execute(
+        "SELECT 1 FROM email_suppressions WHERE email = ?", (email,)
+    ).fetchone() is not None
+
+
+def suppress_email(conn, email, reason, detail=None):
+    """Record an address as undeliverable. Idempotent — webhooks get retried."""
+    conn.execute(
+        """INSERT INTO email_suppressions (email, reason, detail, created_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(email) DO UPDATE SET
+               reason = excluded.reason,
+               detail = excluded.detail,
+               created_at = excluded.created_at""",
+        (email, reason, detail, int(time.time()))
+    )
+
+
+def verify_webhook_signature(headers, payload):
+    """
+    Verify a Resend (Svix) webhook signature.
+
+    Svix signs "{id}.{timestamp}.{raw body}" with HMAC-SHA256 under the
+    base64 secret that follows the "whsec_" prefix, and sends one or more
+    space-separated "v1,<sig>" candidates so keys can be rotated.
+    """
+    if not RESEND_WEBHOOK_SECRET:
+        print("⚠️  Resend webhook received but RESEND_WEBHOOK_SECRET is unset — rejecting.")
+        return False
+
+    msg_id = headers.get('svix-id')
+    timestamp = headers.get('svix-timestamp')
+    signatures = headers.get('svix-signature')
+    if not (msg_id and timestamp and signatures):
+        return False
+
+    # Reject stale payloads so a captured request can't be replayed later.
+    try:
+        if abs(time.time() - int(timestamp)) > WEBHOOK_TOLERANCE:
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    secret = RESEND_WEBHOOK_SECRET.split('_', 1)[1] if RESEND_WEBHOOK_SECRET.startswith('whsec_') else RESEND_WEBHOOK_SECRET
+    try:
+        key = base64.b64decode(secret)
+    except Exception:
+        return False
+
+    signed = f"{msg_id}.{timestamp}.".encode() + payload
+    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+
+    for candidate in signatures.split():
+        version, _, value = candidate.partition(',')
+        if version == 'v1' and hmac.compare_digest(value, expected):
+            return True
+    return False
+
 
 def confirmation_quota_remaining(conn, email):
     """True if this address is still under its send limit for the window."""
@@ -239,7 +318,8 @@ def register():
             # the two cases apart and we don't email an existing user on demand.
             should_send = existing['is_active'] == 0
 
-        if should_send and confirmation_quota_remaining(conn, username):
+        if should_send and not is_email_suppressed(conn, username) \
+                and confirmation_quota_remaining(conn, username):
             conn.execute(
                 "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
                 (username, int(time.time()))
@@ -268,7 +348,9 @@ def resend_confirmation():
             "SELECT is_active FROM users WHERE username = ?", (username,)
         ).fetchone()
 
-        if user is not None and user['is_active'] == 0 and confirmation_quota_remaining(conn, username):
+        if user is not None and user['is_active'] == 0 \
+                and not is_email_suppressed(conn, username) \
+                and confirmation_quota_remaining(conn, username):
             conn.execute(
                 "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
                 (username, int(time.time()))
@@ -281,6 +363,56 @@ def resend_confirmation():
         print(f"RESEND CONFIRMATION ERROR for {username}: {e}")
 
     return jsonify(REGISTER_OK), 200
+
+@app.route('/webhooks/resend', methods=['POST'])
+def resend_webhook():
+    """
+    Receives Resend delivery events. Hard bounces and spam complaints add the
+    address to email_suppressions so we stop mailing it — continuing to send to
+    dead mailboxes is what erodes domain reputation.
+    """
+    if not verify_webhook_signature(request.headers, request.get_data()):
+        return jsonify({"error": "Invalid signature"}), 401
+
+    event = request.get_json(silent=True) or {}
+    event_type = event.get('type')
+    data = event.get('data') or {}
+    recipients = data.get('to') or []
+    if isinstance(recipients, str):
+        recipients = [recipients]
+
+    if event_type == 'email.bounced':
+        bounce = data.get('bounce') or {}
+        # Only permanent failures are suppressed. A transient bounce (full
+        # mailbox, greylisting) resolves on its own and must stay deliverable.
+        if str(bounce.get('type', '')).lower() != 'permanent':
+            print(f"Resend soft bounce for {recipients}: {bounce.get('subType')}")
+            return jsonify({"status": "ignored"}), 200
+        reason, detail = 'hard_bounce', bounce.get('subType') or bounce.get('message')
+    elif event_type == 'email.complained':
+        reason, detail = 'complaint', 'marked as spam'
+    else:
+        # Delivered, opened, clicked, delayed: acknowledged so Resend stops
+        # retrying, but nothing to record.
+        return jsonify({"status": "ignored"}), 200
+
+    try:
+        conn = get_db_connection()
+        for address in recipients:
+            address = address.strip().lower()
+            if not address:
+                continue
+            suppress_email(conn, address, reason, detail)
+            print(f"Suppressed {address}: {reason} ({detail})")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        # 500 tells Svix to retry, which is what we want for a transient DB error.
+        print(f"RESEND WEBHOOK ERROR ({event_type}): {e}")
+        return jsonify({"error": "Could not record event"}), 500
+
+    return jsonify({"status": "recorded"}), 200
+
 
 @app.route('/user/<username>/tier', methods=['PATCH'])
 def update_subscription_tier(username):
