@@ -31,6 +31,13 @@ load_dotenv()
 # worker. Set APP_ENV=production in .env to switch.
 APP_ENV = os.environ.get('APP_ENV', 'development')
 
+# When True, output for free-tier (and unauthenticated) callers is watermarked.
+# Off by default because MI_Watermark.png is not checked into the repo — see the
+# availability check next to WATERMARK_PATH below. If this is turned on while
+# the asset is missing, startup logs a warning and uploads continue
+# unwatermarked rather than failing.
+WATERMARK_FREE_TIER = False
+
 app = Flask(__name__)
 CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
 
@@ -402,6 +409,16 @@ def logout():
 
 WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_Watermark.png")
 
+# Resolved once at startup so a missing asset costs one warning instead of an
+# exception per upload. Watermarking is best-effort: if the file isn't there,
+# free-tier output simply goes out unwatermarked.
+WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and os.path.exists(WATERMARK_PATH)
+if WATERMARK_FREE_TIER and not WATERMARK_AVAILABLE:
+    print(
+        f"⚠️  WATERMARK_FREE_TIER is enabled but {WATERMARK_PATH} is missing — "
+        "free-tier output will NOT be watermarked."
+    )
+
 def apply_watermark(image_bytes):
     output = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     logo = Image.open(WATERMARK_PATH).convert("RGBA")
@@ -592,8 +609,13 @@ def upload_file():
 
     t_process = time.perf_counter()
 
-    #if is_free_tier:
-    #    result_bytes = apply_watermark(result_bytes)
+    if WATERMARK_AVAILABLE and is_free_tier:
+        # Best-effort: a watermarking failure must not cost the user the image
+        # they already paid GPU time for, so fall back to the unmarked result.
+        try:
+            result_bytes = apply_watermark(result_bytes)
+        except Exception as e:
+            print(f"⚠️  Watermarking failed, returning unwatermarked image: {e}")
 
     print(
         "⏱️  upload-endpoint timing — "
