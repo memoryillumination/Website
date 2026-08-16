@@ -8,6 +8,7 @@ import pillow_avif  # noqa: F401  (importing registers the AVIF plugin with Pill
 # any host built from requirements_prod.txt.
 # from rembg import remove as rembg_remove, new_session as rembg_new_session
 from flask import Flask, request, jsonify, send_file, make_response
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_cors import CORS
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -39,6 +40,15 @@ APP_ENV = os.environ.get('APP_ENV', 'development')
 WATERMARK_FREE_TIER = False
 
 app = Flask(__name__)
+
+# Nginx terminates TLS and proxies to uWSGI, so request.remote_addr is the
+# proxy itself — without this every caller would share one rate-limit bucket.
+# x_for=1 trusts exactly one hop, taking the address Nginx appended; trusting
+# more would let a client forge the chain and evade limits. Requires
+# `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in the Nginx
+# site config.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
 CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
 
 # Config
@@ -60,6 +70,19 @@ SITE_BASE_URL = os.environ.get('SITE_BASE_URL', 'https://memoryillumination.com'
 # endpoint would let anyone block delivery to any address.
 RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET')
 WEBHOOK_TOLERANCE = 300           # max age of a webhook timestamp, in seconds
+
+# Per-IP rate limits as {name: (max_requests, window_seconds)}. Enforced in
+# SQLite rather than process memory so the counts hold across uWSGI workers.
+# 'login' counts only failed attempts, so a legitimate user is never locked out.
+# 'upload_gpu' is deliberately the tightest: featureB dispatches to Modal, and
+# that is the only path here that costs money per request.
+RATE_LIMITS = {
+    'register':   (5, 3600),
+    'resend':     (10, 3600),
+    'login':      (20, 900),
+    'upload':     (30, 3600),
+    'upload_gpu': (10, 3600),
+}
 
 CONFIRM_TOKEN_MAX_AGE = 3600      # 1 hour, matches the copy in the email body
 CONFIRM_RESEND_WINDOW = 3600      # throttle window for confirmation sends
@@ -143,6 +166,17 @@ def init_db():
         ON confirmation_sends (email, sent_at)
     ''')
 
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS rate_limits (
+            bucket TEXT NOT NULL,
+            hit_at INTEGER NOT NULL
+        )
+    ''')
+    conn.execute('''
+        CREATE INDEX IF NOT EXISTS idx_rate_limits_bucket
+        ON rate_limits (bucket, hit_at)
+    ''')
+
     # Addresses we must stop mailing: hard bounces (the mailbox does not exist)
     # and spam complaints. Kept separate from users so a suppression survives
     # the account being deleted and re-created.
@@ -159,6 +193,52 @@ def init_db():
     conn.close()
 
 init_db()
+
+
+# --- RATE LIMITING ---
+
+def client_ip():
+    """Caller's address, as resolved by ProxyFix from Nginx's X-Forwarded-For."""
+    return request.remote_addr or 'unknown'
+
+
+def rate_limit_retry_after(conn, name, identifier, record=True):
+    """
+    Seconds the caller must wait before retrying `name`, or 0 to proceed.
+
+    Set record=False to test a bucket without consuming quota — used by
+    /login so only failed attempts count against the limit.
+    """
+    limit, window = RATE_LIMITS[name]
+    bucket = f"{name}:{identifier}"
+    now = int(time.time())
+
+    # Prune this bucket only. A global sweep here would use one endpoint's
+    # window to delete rows another endpoint still needs.
+    conn.execute("DELETE FROM rate_limits WHERE bucket = ? AND hit_at < ?", (bucket, now - window))
+
+    hits = [r[0] for r in conn.execute(
+        "SELECT hit_at FROM rate_limits WHERE bucket = ? ORDER BY hit_at", (bucket,)
+    )]
+    if len(hits) >= limit:
+        # Quota frees up when the oldest hit falls out of the window.
+        return max(1, hits[0] + window - now)
+
+    if record:
+        conn.execute("INSERT INTO rate_limits (bucket, hit_at) VALUES (?, ?)", (bucket, now))
+
+    # Idle buckets are never revisited, so sweep them occasionally rather than
+    # letting the table grow without bound.
+    if random.random() < 0.01:
+        longest = max(w for _, w in RATE_LIMITS.values())
+        conn.execute("DELETE FROM rate_limits WHERE hit_at < ?", (now - longest,))
+    return 0
+
+
+def too_many_requests(retry_after):
+    response = jsonify({"error": "Too many requests. Please try again later."})
+    response.headers['Retry-After'] = str(retry_after)
+    return response, 429
 
 
 # --- EMAIL CONFIRMATION ---
@@ -301,6 +381,13 @@ def register():
 
     try:
         conn = get_db_connection()
+
+        retry_after = rate_limit_retry_after(conn, 'register', client_ip())
+        if retry_after:
+            conn.commit()
+            conn.close()
+            return too_many_requests(retry_after)
+
         existing = conn.execute(
             "SELECT is_active FROM users WHERE username = ?", (username,)
         ).fetchone()
@@ -327,6 +414,9 @@ def register():
             conn.commit()
             send_confirmation_email(username)
 
+        # Commit unconditionally: the rate-limit hit recorded above is rolled
+        # back on paths that send no mail, which would make the limit unenforceable.
+        conn.commit()
         conn.close()
         return jsonify(REGISTER_OK), 201
     except Exception as e:
@@ -344,6 +434,13 @@ def resend_confirmation():
 
     try:
         conn = get_db_connection()
+
+        retry_after = rate_limit_retry_after(conn, 'resend', client_ip())
+        if retry_after:
+            conn.commit()
+            conn.close()
+            return too_many_requests(retry_after)
+
         user = conn.execute(
             "SELECT is_active FROM users WHERE username = ?", (username,)
         ).fetchone()
@@ -358,6 +455,8 @@ def resend_confirmation():
             conn.commit()
             send_confirmation_email(username)
 
+        # See /register: the rate-limit hit must survive paths that send nothing.
+        conn.commit()
         conn.close()
     except Exception as e:
         print(f"RESEND CONFIRMATION ERROR for {username}: {e}")
@@ -491,11 +590,19 @@ def login():
     # silently fails to find the row.
     username = (data.get('username') or '').strip().lower()
     conn = get_db_connection()
+
+    # Probe without recording: only failures below consume quota, so a user
+    # signing in normally is never locked out of their own account.
+    retry_after = rate_limit_retry_after(conn, 'login', client_ip(), record=False)
+    if retry_after:
+        conn.close()
+        return too_many_requests(retry_after)
+
     user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-    conn.close()
     if user and user['is_active'] == 1:
         try:
             if ph.verify(user['password_hash'], data.get('password')):
+                conn.close()
                 token = serializer.dumps(username, salt='session')
                 response = make_response(jsonify({"success": True, "newUser": user['has_completed_tour'] == 0}), 200)
                 response.set_cookie(
@@ -509,6 +616,12 @@ def login():
                 )
                 return response
         except VerifyMismatchError: pass
+
+    # Reached only on failure: unknown user, unconfirmed account, or bad
+    # password. Record the attempt so repeated guessing hits the limit.
+    rate_limit_retry_after(conn, 'login', client_ip())
+    conn.commit()
+    conn.close()
     return jsonify({"error": "Unauthorized"}), 401
 
 @app.route('/tour-complete', methods=['POST'])
@@ -684,6 +797,20 @@ def upload_file():
     file     = request.files['myFile']
     settings = json.loads(request.form.get('settings', '{}'))
     token    = request.cookies.get('session', '')
+
+    # Checked before reading the upload body: this endpoint needs no session, so
+    # the per-IP limit is the only thing standing between an anonymous caller
+    # and unbounded Modal GPU spend.
+    ip = client_ip()
+    conn = get_db_connection()
+    retry_after = rate_limit_retry_after(conn, 'upload', ip)
+    if not retry_after and settings.get('featureB'):
+        retry_after = rate_limit_retry_after(conn, 'upload_gpu', ip)
+    conn.commit()
+    conn.close()
+    if retry_after:
+        return too_many_requests(retry_after)
+
     input_data = file.read()
 
     t_read = time.perf_counter()
