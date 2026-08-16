@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image, ImageOps
 import pillow_heif
 import pillow_avif  # noqa: F401  (importing registers the AVIF plugin with Pillow)
+from rembg import remove as rembg_remove, new_session as rembg_new_session
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from argon2 import PasswordHasher
@@ -17,6 +18,10 @@ import requests
 pillow_heif.register_heif_opener()
 
 load_dotenv()
+
+# Loaded once at startup so per-request calls to simplify_for_coloring() don't
+# pay session/model init cost on every upload.
+REMBG_SESSION = rembg_new_session('u2net')
 
 # APP_ENV selects which GPU backend featureB routes to: "development" (default)
 # uses the local worker over loopback HTTP; "production" uses the Modal-hosted
@@ -436,20 +441,47 @@ def normalize_image(input_data):
     return buf.getvalue()
 
 
+def simplify_for_coloring(image_bytes):
+    """
+    Pre-flatten pass so the diffusion worker traces an already-simplified
+    image instead of full photo detail:
+      1. Edge-preserving stylization smooths low-contrast texture (fabric,
+         wood grain) within the subject while keeping their outline/features.
+      2. rembg segmentation + white composite removes the background
+         entirely, since stylization alone only smooths texture and still
+         preserves background object edges (picture frames, furniture seams).
+    """
+    img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    stylized = cv2.stylization(img, sigma_s=150, sigma_r=0.5)
+    _, stylized_bytes = cv2.imencode(".png", stylized)
+
+    rgba_bytes = rembg_remove(stylized_bytes.tobytes(), session=REMBG_SESSION)
+    rgba = Image.open(io.BytesIO(rgba_bytes)).convert("RGBA")
+    white_bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    composited = Image.alpha_composite(white_bg, rgba).convert("RGB")
+
+    buf = io.BytesIO()
+    composited.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 WORKER_API_URL = "http://127.0.0.1:5001/generate"
 
-def run_local_diffusion_workflow(image_bytes):
+def run_local_diffusion_workflow(image_bytes, inference_params=None):
     """
     Ships raw user image bytes directly over local loopback to our continuous
     diffusers worker engine on port 5001 and returns the finished line art bytes.
+    inference_params (optional dict) may carry prompt/num_inference_steps/
+    guidance_scale overrides for tuning without restarting the worker.
     """
     try:
         # Wrap the raw image into standard multipart form data
         files = {'image': ('input.png', image_bytes, 'image/png')}
+        data = {k: v for k, v in (inference_params or {}).items() if v is not None}
 
         # Dispatch to our persistent background worker daemon
         print("Routing image payload to hot local VRAM engine...")
-        response = requests.post(WORKER_API_URL, files=files, timeout=90)
+        response = requests.post(WORKER_API_URL, files=files, data=data, timeout=90)
 
         if response.status_code != 200:
             print(f"❌ Worker rejected payload: {response.text}")
@@ -477,10 +509,10 @@ def run_remote_diffusion_workflow(image_bytes):
         raise e
 
 
-def run_diffusion_workflow(image_bytes):
+def run_diffusion_workflow(image_bytes, inference_params=None):
     if APP_ENV == 'production':
         return run_remote_diffusion_workflow(image_bytes)
-    return run_local_diffusion_workflow(image_bytes)
+    return run_local_diffusion_workflow(image_bytes, inference_params)
 
 @app.route('/upload-endpoint', methods=['POST'])
 def upload_file():
@@ -520,7 +552,13 @@ def upload_file():
         # Execution Routing Split
         if settings.get('featureB'):
             # Pass off payload to the local or Modal GPU worker, per APP_ENV
-            result_bytes = run_diffusion_workflow(input_data)
+            inference_params = {
+                'prompt': settings.get('prompt'),
+                'num_inference_steps': settings.get('num_inference_steps'),
+                'guidance_scale': settings.get('guidance_scale'),
+            }
+            pre_simplified = simplify_for_coloring(input_data)
+            result_bytes = run_diffusion_workflow(pre_simplified, inference_params)
         else:
             # High speed OpenCV classic fallback path
             img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
