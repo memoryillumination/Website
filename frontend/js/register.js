@@ -56,8 +56,9 @@ window.addEventListener("DOMContentLoaded", () => {
 
   registerForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    const username = document.querySelector("#reg-username-input").value;
+    const username = document.querySelector("#reg-username-input").value.trim().toLowerCase();
     const password = document.querySelector("#reg-password-input").value;
+    statusMessage.style.color = "";
     statusMessage.textContent = "Processing registration...";
 
     fetch(`${API_BASE_URL}/register`, {
@@ -66,11 +67,19 @@ window.addEventListener("DOMContentLoaded", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     })
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then(() => {
+      .then((res) => res.json().then((body) => ({ ok: res.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok) {
+          // 400s carry a specific reason (bad address, short password); show it
+          // rather than a blanket failure the user can't act on.
+          statusMessage.style.color = "#c0392b";
+          statusMessage.textContent = body.error || "Registration failed. Try again.";
+          return;
+        }
         window.location.href = "login.html?registered=1";
       })
       .catch(() => {
+        statusMessage.style.color = "#c0392b";
         statusMessage.textContent = "Registration failed. Try again.";
       });
   });

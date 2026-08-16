@@ -1,14 +1,14 @@
-import os, io, cv2, json, sqlite3
+import os, io, re, cv2, json, sqlite3
 import numpy as np
 from PIL import Image, ImageOps
 import pillow_heif
 import pillow_avif  # noqa: F401  (importing registers the AVIF plugin with Pillow)
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
-from flask_mail import Mail, Message
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from itsdangerous import URLSafeTimedSerializer
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+import resend
 from dotenv import load_dotenv
 import random
 import time
@@ -28,16 +28,27 @@ CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
 
 # Config
 app.config.update(
-    MAIL_SERVER='smtp.gmail.com',
-    MAIL_PORT=587,
-    MAIL_USE_TLS=True,
     SECRET_KEY=os.environ.get('SECRET_KEY'),
-    MAIL_USERNAME=os.environ.get('EMAIL_USER'),
-    MAIL_PASSWORD=os.environ.get('EMAIL_PASS'),
-    MAIL_DEFAULT_SENDER=os.environ.get('EMAIL_USER')
 )
 
-mail = Mail(app)
+# Transactional email goes through Resend, sending from the verified
+# mail.memoryillumination.com subdomain. REPLY_TO is a real inbox (Cloudflare
+# Email Routing) so replies to a noreply@ sender don't vanish.
+resend.api_key = os.environ.get('EMAIL_API_KEY')
+MAIL_FROM = os.environ.get('MAIL_FROM', 'Memory Illumination <noreply@mail.memoryillumination.com>')
+MAIL_REPLY_TO = os.environ.get('MAIL_REPLY_TO', 'support@memoryillumination.com')
+API_BASE_URL = os.environ.get('API_BASE_URL', 'https://api.memoryillumination.com')
+SITE_BASE_URL = os.environ.get('SITE_BASE_URL', 'https://memoryillumination.com')
+
+CONFIRM_TOKEN_MAX_AGE = 3600      # 1 hour, matches the copy in the email body
+CONFIRM_RESEND_WINDOW = 3600      # throttle window for confirmation sends
+CONFIRM_RESEND_LIMIT = 3          # max confirmation emails per address per window
+
+# Deliberately permissive: real validation is "did the confirmation email
+# arrive". This only rejects input that can't be an address at all, so we
+# don't hand obvious garbage to Resend and rack up bounces.
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$')
+
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 ph = PasswordHasher()
 DB_NAME = os.path.join(os.path.dirname(__file__), "users.db")
@@ -97,28 +108,164 @@ def init_db():
             ADD COLUMN has_completed_tour INTEGER DEFAULT 0
         ''')
 
+    # Throttle log for confirmation emails. Kept in SQLite rather than process
+    # memory so the limit holds across uWSGI workers.
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS confirmation_sends (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            email   TEXT NOT NULL,
+            sent_at INTEGER NOT NULL
+        )
+    ''')
+    conn.execute('''
+        CREATE INDEX IF NOT EXISTS idx_confirmation_sends_email
+        ON confirmation_sends (email, sent_at)
+    ''')
+
     conn.commit()
     conn.close()
 
 init_db()
 
+
+# --- EMAIL CONFIRMATION ---
+
+def confirmation_quota_remaining(conn, email):
+    """True if this address is still under its send limit for the window."""
+    cutoff = int(time.time()) - CONFIRM_RESEND_WINDOW
+    conn.execute("DELETE FROM confirmation_sends WHERE sent_at < ?", (cutoff,))
+    recent = conn.execute(
+        "SELECT COUNT(*) FROM confirmation_sends WHERE email = ? AND sent_at >= ?",
+        (email, cutoff)
+    ).fetchone()[0]
+    return recent < CONFIRM_RESEND_LIMIT
+
+
+def send_confirmation_email(email):
+    """
+    Send an account confirmation link. Returns True on success.
+
+    Never raises: registration must not fail just because the mail provider is
+    having a bad day. A caller that gets False has already created the account,
+    and the user can recover through /resend-confirmation.
+    """
+    try:
+        token = serializer.dumps(email, salt='email-confirm')
+        link = f"{API_BASE_URL}/confirm/{token}"
+        resend.Emails.send({
+            "from": MAIL_FROM,
+            "to": [email],
+            "reply_to": MAIL_REPLY_TO,
+            "subject": "Confirm your Memory Illumination account",
+            "html": (
+                "<p>Thanks for signing up. Confirm your account to get started:</p>"
+                f'<p><a href="{link}">Confirm my account</a></p>'
+                "<p>Or paste this link into your browser:<br>"
+                f'<span style="word-break:break-all">{link}</span></p>'
+                "<p>This link expires in 1 hour. "
+                "If you didn't create this account, you can ignore this email.</p>"
+            ),
+            "text": (
+                "Thanks for signing up. Confirm your account by opening this link:\n\n"
+                f"{link}\n\n"
+                "This link expires in 1 hour. "
+                "If you didn't create this account, you can ignore this email."
+            ),
+        })
+        return True
+    except Exception as e:
+        print(f"CONFIRMATION EMAIL ERROR for {email}: {e}")
+        return False
+
+
+def _confirm_page(heading, body, ok=True):
+    color = "#396cd8" if ok else "#c0392b"
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>{heading}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:system-ui,sans-serif;max-width:480px;margin:4rem auto;padding:0 1rem;text-align:center">
+<h1 style="color:{color};font-size:1.4rem">{heading}</h1>
+<p style="color:#444">{body}</p>
+<p><a href="{SITE_BASE_URL}/login.html" style="color:#396cd8">Go to login</a></p>
+</body></html>"""
+
+# Identical response whether or not the address is already registered, so this
+# endpoint can't be used to enumerate accounts.
+REGISTER_OK = {"message": "Check your email for a confirmation link."}
+
+
 @app.route('/register', methods=['POST'])
 def register():
-    data = request.json
+    data = request.json or {}
     username, password = data.get('username'), data.get('password')
+
+    if not isinstance(username, str) or not EMAIL_RE.match(username.strip()):
+        return jsonify({"error": "Enter a valid email address."}), 400
+    if not isinstance(password, str) or len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters."}), 400
+    username = username.strip().lower()
+
     try:
-        hash_pw = ph.hash(password)
         conn = get_db_connection()
-        conn.execute(
-            "INSERT INTO users (username, password_hash, is_active, subscription_tier_id) VALUES (?, ?, 1, 1)",
-            (username, hash_pw)
-        )
-        conn.commit()
+        existing = conn.execute(
+            "SELECT is_active FROM users WHERE username = ?", (username,)
+        ).fetchone()
+
+        if existing is None:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_active, subscription_tier_id) VALUES (?, ?, 0, 1)",
+                (username, ph.hash(password))
+            )
+            conn.commit()
+            should_send = True
+        else:
+            # Already registered. Re-send the link if they never confirmed;
+            # stay silent if the account is live, so an attacker can't tell
+            # the two cases apart and we don't email an existing user on demand.
+            should_send = existing['is_active'] == 0
+
+        if should_send and confirmation_quota_remaining(conn, username):
+            conn.execute(
+                "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
+                (username, int(time.time()))
+            )
+            conn.commit()
+            send_confirmation_email(username)
+
         conn.close()
-        return jsonify({"message": "Registration successful"}), 201
+        return jsonify(REGISTER_OK), 201
     except Exception as e:
-        print(f"REGISTRATION ERROR: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"REGISTRATION ERROR for {username}: {e}")
+        return jsonify({"error": "Registration failed. Please try again."}), 500
+
+
+@app.route('/resend-confirmation', methods=['POST'])
+def resend_confirmation():
+    data = request.json or {}
+    username = data.get('username')
+    if not isinstance(username, str) or not EMAIL_RE.match(username.strip()):
+        return jsonify({"error": "Enter a valid email address."}), 400
+    username = username.strip().lower()
+
+    try:
+        conn = get_db_connection()
+        user = conn.execute(
+            "SELECT is_active FROM users WHERE username = ?", (username,)
+        ).fetchone()
+
+        if user is not None and user['is_active'] == 0 and confirmation_quota_remaining(conn, username):
+            conn.execute(
+                "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
+                (username, int(time.time()))
+            )
+            conn.commit()
+            send_confirmation_email(username)
+
+        conn.close()
+    except Exception as e:
+        print(f"RESEND CONFIRMATION ERROR for {username}: {e}")
+
+    return jsonify(REGISTER_OK), 200
 
 @app.route('/user/<username>/tier', methods=['PATCH'])
 def update_subscription_tier(username):
@@ -155,25 +302,54 @@ def update_subscription_tier(username):
 @app.route('/confirm/<token>')
 def confirm_email(token):
     try:
-        email = serializer.loads(token, salt='email-confirm', max_age=3600)
-        conn = get_db_connection()
-        conn.execute("UPDATE users SET is_active = 1 WHERE username = ?", (email,))
-        conn.commit()
-        conn.close()
-        return "Account activated! You can now log in.", 200
-    except:
-        return "Expired/Invalid link", 400
+        email = serializer.loads(token, salt='email-confirm', max_age=CONFIRM_TOKEN_MAX_AGE)
+    except SignatureExpired:
+        return _confirm_page(
+            "This link has expired",
+            "Confirmation links are valid for one hour. Request a new one from the login page.",
+            ok=False
+        ), 400
+    except BadSignature:
+        return _confirm_page(
+            "This link isn't valid",
+            "Check that you copied the whole link from the email.",
+            ok=False
+        ), 400
+
+    conn = get_db_connection()
+    result = conn.execute(
+        "UPDATE users SET is_active = 1 WHERE username = ?", (email,)
+    )
+    conn.commit()
+    conn.close()
+
+    # rowcount is 0 only if the account was deleted after the token was issued —
+    # a valid signature is no guarantee the user still exists.
+    if result.rowcount == 0:
+        return _confirm_page(
+            "Account not found",
+            "This account no longer exists. You can register again.",
+            ok=False
+        ), 404
+
+    return _confirm_page(
+        "Account confirmed",
+        "You're all set — you can now log in."
+    ), 200
 
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.json
+    data = request.json or {}
+    # Must match the normalisation /register applies, or mixed-case input
+    # silently fails to find the row.
+    username = (data.get('username') or '').strip().lower()
     conn = get_db_connection()
-    user = conn.execute("SELECT * FROM users WHERE username = ?", (data.get('username'),)).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
     conn.close()
     if user and user['is_active'] == 1:
         try:
             if ph.verify(user['password_hash'], data.get('password')):
-                token = serializer.dumps(data.get('username'), salt='session')
+                token = serializer.dumps(username, salt='session')
                 response = make_response(jsonify({"success": True, "newUser": user['has_completed_tour'] == 0}), 200)
                 response.set_cookie(
                     "session",
