@@ -15,9 +15,13 @@ itsdangerous>=2.2.0
 python-dotenv>=1.0.1
 requests>=2.31.0
 numpy>=1.26.0
-opencv-python-headless>=4.9.0.80  # Headless avoids unnecessary X11/GUI dependencies in a server VM
-pillow-heif>=0.18.0        # HEIC/HEIF decoding (iPhone default photo format)
-pillow-avif-plugin>=1.4.0  # AVIF decoding (Android/Chrome default in some flows)
+# Image parsers are the largest untrusted-input surface in this app: they
+# decode attacker-supplied bytes in native code. Pinned to a known-good
+# floor and a tested ceiling — bump deliberately, and check release notes
+# for security fixes rather than letting them drift.
+opencv-python-headless>=4.13.0.92,<5.0.0  # Headless avoids unnecessary X11/GUI dependencies in a server VM
+pillow-heif>=1.5.0,<2.0.0        # HEIC/HEIF decoding (iPhone default photo format)
+pillow-avif-plugin>=1.6.0,<2.0.0  # AVIF decoding (Android/Chrome default in some flows)
 
 # --- AI Inference Stack (flux_1_kontext.py) ---
 torch
@@ -29,4 +33,4 @@ accelerate>=0.33.0
 sentencepiece>=0.2.0
 protobuf>=5.27.0
 huggingface_hub>=0.24.0
-Pillow>=10.3.0
+Pillow>=12.2.0,<13.0.0

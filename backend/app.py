@@ -39,6 +39,12 @@ APP_ENV = os.environ.get('APP_ENV', 'development')
 WATERMARK_FREE_TIER = False
 
 app = Flask(__name__)
+
+# Defence in depth behind Nginx's `client_max_body_size 50M` — Flask rejects
+# oversized bodies with 413 even if the Nginx config drifts or another
+# front-end is put in place.
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+
 CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
 
 # Config
@@ -692,17 +698,59 @@ class UnsupportedImageError(Exception):
     pass
 
 
+class ImageTooLargeError(Exception):
+    pass
+
+
+# Only the formats we actually advertise. Pillow otherwise registers 43 decoders
+# against untrusted bytes, including EPS — which it renders by shelling out to
+# Ghostscript. Passing this to Image.open() cuts the native parser attack
+# surface to the five we need.
+ALLOWED_IMAGE_FORMATS = ['JPEG', 'PNG', 'WEBP', 'HEIF', 'AVIF']
+
+# Pixel ceiling, checked from the header before any pixel buffer is allocated.
+# Pillow's own bomb guard only *warns* at 89 MP and raises above 179 MP, by
+# which point the memory is already committed: a 189 KB upload declaring
+# 13000x13000 peaked at ~900 MB RSS.
+#
+# 64 MP clears every current phone camera — 50 MP sensors (Pixel 8, Galaxy S23)
+# output 8192x6144 = 50.3 MP, so a 50 MP cap would reject them by a hair. Peak
+# decode at this ceiling is still ~400 MB, so this bounds the blast radius
+# rather than making it cheap; the per-IP upload limit is the other half.
+MAX_UPLOAD_PIXELS = 64_000_000
+
+
 def normalize_image(input_data):
     """
-    Decode arbitrary upload bytes (JPEG/PNG/WEBP/HEIC/AVIF/...) via Pillow and
+    Decode arbitrary upload bytes (JPEG/PNG/WEBP/HEIC/AVIF) via Pillow and
     re-encode as PNG, so downstream OpenCV and the diffusion worker only ever
     have to deal with one known-good format.
+
+    Re-encoding also strips everything that is not pixels — appended payloads,
+    EXIF, colour profiles — so nothing from the original file survives.
     """
     try:
-        image = Image.open(io.BytesIO(input_data))
+        image = Image.open(io.BytesIO(input_data), formats=ALLOWED_IMAGE_FORMATS)
+    except Exception:
+        raise UnsupportedImageError(
+            "Unsupported or corrupt image file. Please upload a JPEG, PNG, HEIC, AVIF, or WEBP photo."
+        )
+
+    # Dimensions come from the header, so this rejects a decompression bomb
+    # before load() allocates anything.
+    width, height = image.size
+    if width * height > MAX_UPLOAD_PIXELS:
+        raise ImageTooLargeError(
+            f"That image is too large ({width}x{height}). "
+            f"Please upload a photo under {MAX_UPLOAD_PIXELS // 1_000_000} megapixels."
+        )
+
+    try:
         image.load()
     except Exception:
-        raise UnsupportedImageError("Unsupported or corrupt image file. Please upload a JPEG, PNG, HEIC, AVIF, or WEBP photo.")
+        raise UnsupportedImageError(
+            "Unsupported or corrupt image file. Please upload a JPEG, PNG, HEIC, AVIF, or WEBP photo."
+        )
 
     buf = io.BytesIO()
     image.convert("RGB").save(buf, format="PNG")
@@ -822,6 +870,8 @@ def upload_file():
         input_data = normalize_image(input_data)
     except UnsupportedImageError as e:
         return jsonify({"error": str(e)}), 400
+    except ImageTooLargeError as e:
+        return jsonify({"error": str(e)}), 413
 
     t_normalize = time.perf_counter()
 
