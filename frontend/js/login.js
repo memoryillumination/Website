@@ -27,8 +27,18 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const passwordInput = document.querySelector("#login-password-input");
   const showPassword = document.querySelector("#login-show-password");
-  showPassword.addEventListener("change", () => {
-    passwordInput.type = showPassword.checked ? "text" : "password";
+  const eyeClosed = showPassword.querySelector('[data-eye="closed"]');
+  const eyeOpen = showPassword.querySelector('[data-eye="open"]');
+
+  showPassword.addEventListener("click", () => {
+    const revealed = passwordInput.type === "text";
+    passwordInput.type = revealed ? "password" : "text";
+    eyeClosed.style.display = revealed ? "" : "none";
+    eyeOpen.style.display = revealed ? "none" : "";
+    const label = revealed ? "Show password" : "Hide password";
+    showPassword.setAttribute("aria-label", label);
+    showPassword.setAttribute("title", label);
+    showPassword.setAttribute("aria-pressed", String(!revealed));
   });
 
   // Show success message if arriving after registration
