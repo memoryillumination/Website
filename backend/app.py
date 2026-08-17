@@ -1,4 +1,4 @@
-import os, io, re, cv2, json, hmac, base64, hashlib, sqlite3
+import os, io, re, cv2, json, hmac, uuid, base64, hashlib, sqlite3
 import numpy as np
 from PIL import Image, ImageOps
 import pillow_heif
@@ -183,6 +183,31 @@ def init_db():
             detail     TEXT,
             created_at INTEGER NOT NULL
         )
+    ''')
+
+    # Async GPU jobs. Lives in SQLite rather than process memory for the same
+    # reason confirmation_sends does: uWSGI runs 4 worker processes, so the
+    # request that polls a job is usually not the one that created it.
+    #
+    # Result bytes are deliberately NOT stored here. Modal retains outputs for
+    # up to 7 days, so /jobs/<id>/result re-fetches from the FunctionCall and
+    # SQLite only holds the metadata needed to authorize and label that fetch.
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS jobs (
+            id           TEXT PRIMARY KEY,
+            call_id      TEXT NOT NULL,
+            owner        TEXT NOT NULL,
+            is_free_tier INTEGER NOT NULL,
+            cold_start   INTEGER NOT NULL,
+            status       TEXT NOT NULL,
+            error        TEXT,
+            created_at   INTEGER NOT NULL,
+            finished_at  INTEGER
+        )
+    ''')
+    conn.execute('''
+        CREATE INDEX IF NOT EXISTS idx_jobs_created
+        ON jobs (created_at)
     ''')
 
     conn.commit()
@@ -820,6 +845,11 @@ def normalize_image(input_data):
 
 def run_remote_diffusion_workflow(image_bytes):
     """
+    SUPERSEDED for the request path by spawn_remote_diffusion(): /upload-endpoint
+    no longer blocks on the GPU. Kept because the commented-out local-inference
+    restoration above is written in terms of run_diffusion_workflow(); delete
+    both once that path is either restored or abandoned.
+
     Dispatches to the Modal-hosted GPU worker (backend/flux_1_kontext_modal.py).
     Only reachable when APP_ENV=production; `modal` is imported lazily so it
     isn't a hard dependency for local development.
@@ -840,6 +870,102 @@ def run_diffusion_workflow(image_bytes, inference_params=None):
     # if APP_ENV != 'production':
     #     return run_local_diffusion_workflow(image_bytes, inference_params)
     return run_remote_diffusion_workflow(image_bytes)
+
+# --- ASYNC GPU JOBS ---
+
+# Wall-clock profiles that drive the client's progress bar. These are estimates,
+# not measurements: the client anchors them to real events (upload completion,
+# poll-confirmed elapsed time, actual completion) and eases between those
+# anchors. Tune from the "⏱️  upload-endpoint timing" and "⏱️  modal worker
+# timing" lines in the logs.
+WARM_ESTIMATE_SECONDS = 20   # container already up: inference + transfer only
+COLD_ESTIMATE_SECONDS = 80   # adds @modal.enter() loading FLUX bf16 onto the A100
+
+# flux_1_kontext_modal.py sets scaledown_window=300, so a container idle longer
+# than that is gone and the next call pays a cold start. Held slightly under the
+# real window: predicting cold and finishing early reads better than the reverse.
+CONTAINER_IDLE_TIMEOUT = 270
+
+# Job rows are metadata only. Keep a day for debugging, then sweep.
+JOB_RETENTION_SECONDS = 86400
+
+
+def predict_cold_start(conn):
+    """
+    True if the next Modal call will likely wait on a container boot.
+
+    Modal's API cannot tell us this directly: InputStatus.PENDING covers both
+    "queued, no container yet" and "actively running", and get_call_graph() is
+    documented as best-effort and not real-time. So we infer it from our own
+    dispatch history, which tracks container warmth closely enough to pick a
+    duration profile.
+    """
+    row = conn.execute(
+        "SELECT MAX(COALESCE(finished_at, created_at)) AS last_seen FROM jobs"
+    ).fetchone()
+    last_seen = row['last_seen'] if row else None
+    if last_seen is None:
+        return True
+    return (int(time.time()) - last_seen) > CONTAINER_IDLE_TIMEOUT
+
+
+def estimate_seconds(cold_start):
+    return COLD_ESTIMATE_SECONDS if cold_start else WARM_ESTIMATE_SECONDS
+
+
+def job_owner(token, ip):
+    """
+    Identity a job is bound to, so one caller cannot poll another's job.
+    Falls back to IP for the anonymous uploads this endpoint still allows.
+    """
+    try:
+        return f"user:{serializer.loads(token, salt='session', max_age=604800)}"
+    except Exception:
+        return f"ip:{ip}"
+
+
+def spawn_remote_diffusion(image_bytes):
+    """Dispatch to the Modal GPU worker without waiting; returns the call id."""
+    import modal
+    remote_model = modal.Cls.from_name("coloring-book-flux", "ColoringModel")
+    return remote_model().process.spawn(image_bytes).object_id
+
+
+def fetch_job_result(call_id):
+    """
+    ('pending', None) | ('done', png_bytes) | ('error', message)
+
+    get(timeout=0) polls without blocking: TimeoutError means the worker is
+    still going, OutputExpiredError means Modal has aged the result out (it
+    retains outputs for ~7 days).
+    """
+    import modal
+    try:
+        result = modal.FunctionCall.from_id(call_id).get(timeout=0)
+    except TimeoutError:
+        return 'pending', None
+    except modal.exception.OutputExpiredError:
+        return 'error', "That result expired before it was downloaded. Please try again."
+    except Exception as e:
+        print(f"❌ Modal job {call_id} failed: {e}")
+        return 'error', "Something went wrong processing that image. Please try again."
+    return 'done', result["flux_sketch"]
+
+
+def load_job(conn, job_id, owner):
+    """The job row, but only for the caller that created it."""
+    return conn.execute(
+        "SELECT * FROM jobs WHERE id = ? AND owner = ?", (job_id, owner)
+    ).fetchone()
+
+
+def sweep_old_jobs(conn):
+    if random.random() < 0.05:
+        conn.execute(
+            "DELETE FROM jobs WHERE created_at < ?",
+            (int(time.time()) - JOB_RETENTION_SECONDS,)
+        )
+
 
 @app.route('/upload-endpoint', methods=['POST'])
 def upload_file():
@@ -891,30 +1017,65 @@ def upload_file():
 
     t_auth = time.perf_counter()
 
+    # Execution Routing Split.
+    #
+    # The GPU path is dispatched asynchronously. It can run for a minute or
+    # more, and pinning one of only 4 uWSGI workers for that long is what
+    # breaks first behind a proxy timeout. The caller gets a job id and polls
+    # /jobs/<id>. The OpenCV path is sub-second, so it stays synchronous and
+    # returns the PNG directly — the client branches on the response type.
+    if settings.get('featureB'):
+        # Everything else that used to live in this branch is commented out:
+        #
+        # inference_params was only ever read by the local loopback worker:
+        # inference_params = {
+        #     'prompt': settings.get('prompt'),
+        #     'num_inference_steps': settings.get('num_inference_steps'),
+        #     'guidance_scale': settings.get('guidance_scale'),
+        # }
+        #
+        # rembg/cv2 pre-flatten pass, now skipped entirely:
+        # pre_simplified = simplify_for_coloring(input_data)
+        conn = get_db_connection()
+        try:
+            cold_start = predict_cold_start(conn)
+            call_id = spawn_remote_diffusion(input_data)
+        except Exception as e:
+            conn.close()
+            print(f"❌ Modal dispatch failure: {e}")
+            return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500
+
+        job_id = uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO jobs (id, call_id, owner, is_free_tier, cold_start, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (job_id, call_id, job_owner(token, ip), int(is_free_tier), int(cold_start), int(time.time()))
+        )
+        sweep_old_jobs(conn)
+        conn.commit()
+        conn.close()
+
+        print(
+            "⏱️  upload-endpoint dispatch — "
+            f"read: {t_read - t_start:.3f}s, "
+            f"normalize: {t_normalize - t_read:.3f}s, "
+            f"auth: {t_auth - t_normalize:.3f}s, "
+            f"job: {job_id}, cold_start: {cold_start}"
+        )
+        return jsonify({
+            "job_id": job_id,
+            "cold_start": cold_start,
+            "estimate_seconds": estimate_seconds(cold_start),
+        }), 202
+
     try:
-        # Execution Routing Split
-        if settings.get('featureB'):
-            # Send the normalized image straight to the Modal GPU worker.
-            # Everything else in this branch is commented out:
-            #
-            # inference_params was only ever read by the local loopback worker:
-            # inference_params = {
-            #     'prompt': settings.get('prompt'),
-            #     'num_inference_steps': settings.get('num_inference_steps'),
-            #     'guidance_scale': settings.get('guidance_scale'),
-            # }
-            #
-            # rembg/cv2 pre-flatten pass, now skipped entirely:
-            # pre_simplified = simplify_for_coloring(input_data)
-            result_bytes = run_diffusion_workflow(input_data)
-        else:
-            # High speed OpenCV classic fallback path
-            img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
-            inv = 255 - img
-            blur = cv2.GaussianBlur(inv, (21, 21), 0)
-            sketch = cv2.divide(img, 255 - blur, scale=256)
-            _, buffer = cv2.imencode(".png", sketch)
-            result_bytes = bytes(buffer)
+        # High speed OpenCV classic fallback path
+        img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
+        inv = 255 - img
+        blur = cv2.GaussianBlur(inv, (21, 21), 0)
+        sketch = cv2.divide(img, 255 - blur, scale=256)
+        _, buffer = cv2.imencode(".png", sketch)
+        result_bytes = bytes(buffer)
     except Exception as e:
         print(f"❌ Image processing failure: {e}")
         return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500
@@ -939,6 +1100,101 @@ def upload_file():
     )
 
     return send_file(io.BytesIO(result_bytes), mimetype='image/png')
+
+
+def job_phase(row, elapsed):
+    """
+    Coarse label for what the worker is most likely doing right now.
+
+    A cold start spends its first stretch in @modal.enter() loading FLUX onto
+    the GPU before denoising begins, so the difference between the two duration
+    profiles is roughly the model-load window. Predicted, not observed — see
+    predict_cold_start().
+    """
+    if row['cold_start'] and elapsed < (COLD_ESTIMATE_SECONDS - WARM_ESTIMATE_SECONDS):
+        return 'warming'
+    return 'generating'
+
+
+@app.route('/jobs/<job_id>', methods=['GET'])
+def job_status(job_id):
+    ip = client_ip()
+    owner = job_owner(request.cookies.get('session', ''), ip)
+
+    conn = get_db_connection()
+    row = load_job(conn, job_id, owner)
+    if row is None:
+        conn.close()
+        return jsonify({"error": "Job not found."}), 404
+
+    elapsed = int(time.time()) - row['created_at']
+    payload = {
+        "status": row['status'],
+        "elapsed": elapsed,
+        "cold_start": bool(row['cold_start']),
+        "estimate_seconds": estimate_seconds(row['cold_start']),
+    }
+
+    # Terminal states are recorded, so don't call Modal again for them.
+    if row['status'] != 'pending':
+        conn.close()
+        if row['status'] == 'error':
+            payload['error'] = row['error']
+        return jsonify(payload), 200
+
+    status, result = fetch_job_result(row['call_id'])
+
+    if status == 'pending':
+        conn.close()
+        payload['phase'] = job_phase(row, elapsed)
+        return jsonify(payload), 200
+
+    # Record the terminal state so later polls (and a reload) are answered from
+    # SQLite. The bytes stay with Modal; /jobs/<id>/result re-fetches them.
+    error = result if status == 'error' else None
+    conn.execute(
+        "UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
+        (status, error, int(time.time()), job_id)
+    )
+    conn.commit()
+    conn.close()
+
+    payload['status'] = status
+    if status == 'error':
+        payload['error'] = error
+    return jsonify(payload), 200
+
+
+@app.route('/jobs/<job_id>/result', methods=['GET'])
+def job_result(job_id):
+    ip = client_ip()
+    owner = job_owner(request.cookies.get('session', ''), ip)
+
+    conn = get_db_connection()
+    row = load_job(conn, job_id, owner)
+    conn.close()
+    if row is None:
+        return jsonify({"error": "Job not found."}), 404
+
+    status, result = fetch_job_result(row['call_id'])
+    if status == 'pending':
+        return jsonify({"error": "That image isn't ready yet."}), 409
+    if status == 'error':
+        return jsonify({"error": result}), 500
+
+    result_bytes = result
+    # Tier was captured when the job was submitted, so a mid-job upgrade or
+    # session expiry can't change the terms the image was generated under.
+    if WATERMARK_AVAILABLE and row['is_free_tier']:
+        # Best-effort, matching /upload-endpoint: a watermarking failure must
+        # not cost the user the image they already paid GPU time for.
+        try:
+            result_bytes = apply_watermark(result_bytes)
+        except Exception as e:
+            print(f"⚠️  Watermarking failed, returning unwatermarked image: {e}")
+
+    return send_file(io.BytesIO(result_bytes), mimetype='image/png')
+
 
 if __name__ == '__main__':
     # Listening on all interfaces for network access
