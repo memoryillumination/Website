@@ -214,11 +214,17 @@
   .mt-0 {
     margin-top: calc(var(--spacing) * 0);
   }
+  .mt-1 {
+    margin-top: calc(var(--spacing) * 1);
+  }
   .mt-2 {
     margin-top: calc(var(--spacing) * 2);
   }
   .mt-4 {
     margin-top: calc(var(--spacing) * 4);
+  }
+  .mt-5 {
+    margin-top: calc(var(--spacing) * 5);
   }
   .mt-7 {
     margin-top: calc(var(--spacing) * 7);
@@ -256,11 +262,17 @@
   .box-border {
     box-sizing: border-box;
   }
+  .block {
+    display: block;
+  }
   .flex {
     display: flex;
   }
   .hidden {
     display: none;
+  }
+  .inline {
+    display: inline;
   }
   .inline-block {
     display: inline-block;
@@ -319,11 +331,17 @@
   .shrink-0 {
     flex-shrink: 0;
   }
+  .transform {
+    transform: var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,);
+  }
   .cursor-default {
     cursor: default;
   }
   .cursor-pointer {
     cursor: pointer;
+  }
+  .resize {
+    resize: both;
   }
   .list-disc {
     list-style-type: disc;
@@ -581,6 +599,9 @@
   .no-underline {
     text-decoration-line: none;
   }
+  .underline {
+    text-decoration-line: underline;
+  }
   .antialiased {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -731,6 +752,19 @@
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-heading);
 }
+#file-input::file-selector-button, #file-input::-webkit-file-upload-button {
+  margin-right: 1em;
+  padding: 0.5em 1em;
+  border: none;
+  border-radius: 0.5em;
+  background: #007bff;
+  color: #fff;
+  font-weight: 500;
+  cursor: pointer;
+}
+#file-input::file-selector-button:hover, #file-input::-webkit-file-upload-button:hover {
+  background: #0056b3;
+}
 @view-transition {
   navigation: auto;
 }
@@ -749,6 +783,26 @@ h1, h2, h3, h4, h5, h6 {
 }
 ::view-transition-new(root) {
   animation: 180ms ease both vt-fade-in;
+}
+@property --tw-rotate-x {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-rotate-y {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-rotate-z {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-skew-x {
+  syntax: "*";
+  inherits: false;
+}
+@property --tw-skew-y {
+  syntax: "*";
+  inherits: false;
 }
 @property --tw-border-style {
   syntax: "*";
@@ -835,6 +889,11 @@ h1, h2, h3, h4, h5, h6 {
 @layer properties {
   @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {
     *, ::before, ::after, ::backdrop {
+      --tw-rotate-x: initial;
+      --tw-rotate-y: initial;
+      --tw-rotate-z: initial;
+      --tw-skew-x: initial;
+      --tw-skew-y: initial;
       --tw-border-style: solid;
       --tw-leading: initial;
       --tw-font-weight: initial;
@@ -855,23 +914,4 @@ h1, h2, h3, h4, h5, h6 {
       --tw-duration: initial;
     }
   }
-}
-
-/* Native file input: the browser's "Choose File" button and the filename
-   text next to it render flush against each other with no styling */
-#file-input::file-selector-button,
-#file-input::-webkit-file-upload-button {
-  margin-right: 1em;
-  padding: 0.5em 1em;
-  border: none;
-  border-radius: 0.5em;
-  background: #007bff;
-  color: #fff;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-#file-input::file-selector-button:hover,
-#file-input::-webkit-file-upload-button:hover {
-  background: #0056b3;
 }

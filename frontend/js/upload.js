@@ -24,6 +24,24 @@ window.addEventListener("DOMContentLoaded", () => {
   const fileInput = document.querySelector("#file-input");
   const check1 = document.querySelector("#check-option-1");
   const check2 = document.querySelector("#check-option-2");
+  const resultSection = document.querySelector("#result");
+  const resultPreview = document.querySelector("#result-preview");
+  const downloadLink = document.querySelector("#download-link");
+
+  // The blob URL backing both the preview and the download link. Held so it can
+  // be revoked before a new result replaces it — otherwise every generation
+  // leaks a blob for the lifetime of the page.
+  let resultObjectUrl = null;
+
+  function clearResult() {
+    resultSection.classList.add("hidden");
+    resultPreview.removeAttribute("src");
+    downloadLink.removeAttribute("href");
+    if (resultObjectUrl) {
+      URL.revokeObjectURL(resultObjectUrl);
+      resultObjectUrl = null;
+    }
+  }
 
   check1.addEventListener("change", () => {
     if (check1.checked) check2.checked = false;
@@ -37,6 +55,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const file = fileInput.files[0];
     if (!file) return (statusMessage.textContent = "Select a file.");
 
+    clearResult();
     statusMessage.textContent = "Processing image...";
     const formData = new FormData();
     formData.append("myFile", file);
@@ -51,12 +70,15 @@ window.addEventListener("DOMContentLoaded", () => {
         return res.blob();
       })
       .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "illuminated.png";
-        a.click();
-        statusMessage.textContent = "Download complete!";
+        // No synthetic a.click() here: the download is now driven by a real
+        // click on a real link, which keeps it out of the way of browser
+        // blocking of programmatic downloads that follow an await.
+        resultObjectUrl = URL.createObjectURL(blob);
+        resultPreview.src = resultObjectUrl;
+        downloadLink.href = resultObjectUrl;
+        resultSection.classList.remove("hidden");
+        statusMessage.textContent = "Ready — preview below, then download.";
+        resultSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
       })
       .catch((err) => {
         statusMessage.textContent = err.message || "Error processing image.";
