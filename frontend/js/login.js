@@ -5,7 +5,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const resendBlock = document.querySelector("#resend-block");
   const resendBtn = document.querySelector("#resend-btn");
 
-  const API_BASE_URL = "https://api.memoryillumination.com";
+  // Injected by scripts/gen_frontend_config.py from the root .env. Falls back
+  // to production so a deploy that never runs the generator still works.
+  const API_BASE_URL = window.MI_CONFIG?.apiBaseUrl || "https://api.memoryillumination.com";
 
   // Must match the normalisation the backend applies, so the address we send
   // to /login and /resend-confirmation is the one stored at registration.

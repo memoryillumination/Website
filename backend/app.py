@@ -1,4 +1,4 @@
-import os, io, re, cv2, json, hmac, base64, hashlib, sqlite3
+import os, io, re, cv2, json, hmac, uuid, base64, hashlib, sqlite3
 import numpy as np
 from PIL import Image, ImageOps
 import pillow_heif
@@ -20,16 +20,70 @@ import requests
 
 pillow_heif.register_heif_opener()
 
-load_dotenv()
+# .env discovery has to satisfy two different layouts:
+#
+#   repo    <root>/.env with app.py in <root>/backend/, so one file serves the
+#           backend and the frontend config generator.
+#   deployed backend/ is flattened -- backend/uwsgi sets chdir=/srv/memory-
+#           illumination with module=app, so app.py IS the root and .env sits
+#           beside it. Assuming the repo layout here resolved the root to /srv
+#           and silently loaded nothing.
+#
+# Nearest first, matching normal dotenv precedence.
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_CANDIDATES = (
+    os.path.join(BACKEND_DIR, '.env'),
+    os.path.join(os.path.dirname(BACKEND_DIR), '.env'),
+)
+ENV_PATH = next((p for p in ENV_CANDIDATES if os.path.exists(p)), None)
+if ENV_PATH:
+    load_dotenv(ENV_PATH)
+else:
+    load_dotenv()  # fall back to python-dotenv's own upward search
 
 # Was loaded once at startup so per-request calls to simplify_for_coloring()
 # didn't pay session/model init cost on every upload.
 # REMBG_SESSION = rembg_new_session('u2net')
 
-# APP_ENV selects which GPU backend featureB routes to: "development" (default)
-# uses the local worker over loopback HTTP; "production" uses the Modal-hosted
-# worker. Set APP_ENV=production in .env to switch.
-APP_ENV = os.environ.get('APP_ENV', 'development')
+# Two orthogonal switches, replacing the old single APP_ENV:
+#
+# DEPLOY_ENV -- where the frontend is served relative to this API. In
+#   development both run on this machine (frontend :8000, API :5000) so the
+#   browser talks to localhost and CORS must allow it; in production they are
+#   hosted separately. Defaults to production so a missing value fails closed
+#   on CORS rather than quietly allowing localhost in a deployed environment.
+#
+# INFERENCE_BACKEND -- where diffusion runs, which is a genuinely separate
+#   question: you can point a local frontend at the Modal GPU, or run the local
+#   worker behind a production frontend.
+def _require_choice(name, default, choices):
+    """
+    Read a setting and fail loudly on anything unrecognised.
+
+    An unvalidated DEPLOY_ENV fails *open*: 'prod' or 'Production' is simply
+    not equal to 'production', so the app would quietly drop into development
+    mode on a live host -- session cookies losing Secure and their domain, and
+    CORS accepting localhost and RFC1918 origins with credentials. Refusing to
+    start is the safer failure.
+    """
+    value = os.environ.get(name, default).strip().lower()
+    if value not in choices:
+        raise RuntimeError(
+            f"{name} must be one of {sorted(choices)}, got {value!r}. "
+            f"Checked .env at: {ENV_PATH or 'not found'}"
+        )
+    return value
+
+
+DEPLOY_ENV = _require_choice('DEPLOY_ENV', 'production', {'development', 'production'})
+IS_PRODUCTION = DEPLOY_ENV == 'production'
+
+INFERENCE_BACKEND = _require_choice('INFERENCE_BACKEND', 'modal', {'local', 'modal'})
+USE_MODAL = INFERENCE_BACKEND == 'modal'
+
+# The local worker is flux_1_kontext.py, a separate Flask process holding the
+# quantised model resident on the Intel XPU. Started independently of this app.
+LOCAL_WORKER_URL = os.environ.get('LOCAL_WORKER_URL', 'http://127.0.0.1:5001/generate')
 
 # When True, output for free-tier (and unauthenticated) callers is watermarked.
 # Off by default because MI_Watermark.png is not checked into the repo — see the
@@ -45,7 +99,54 @@ app = Flask(__name__)
 # front-end is put in place.
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
+# Origins are derived from DEPLOY_ENV but can be overridden explicitly. The
+# localhost entries are added only outside production: allowing them there
+# would let a page on any visitor's own machine call this API with credentials.
+SITE_BASE_URL = os.environ.get(
+    'SITE_BASE_URL',
+    'https://memoryillumination.com' if IS_PRODUCTION else 'http://localhost:8000',
+)
+API_BASE_URL = os.environ.get(
+    'API_BASE_URL',
+    'https://api.memoryillumination.com' if IS_PRODUCTION else 'http://localhost:5000',
+)
+
+# Port the frontend dev server listens on, used to build the permitted origin.
+FRONTEND_PORT = os.environ.get('FRONTEND_PORT', '8000')
+
+if IS_PRODUCTION:
+    CORS_ORIGINS = [SITE_BASE_URL]
+else:
+    # In development the frontend is reachable over the LAN as well as on
+    # loopback -- browsing from a phone or another machine at
+    # http://192.168.1.116:8000 sends that as the Origin -- so match loopback
+    # plus the RFC1918 private ranges on the frontend port.
+    #
+    # A literal '*' is not an option: supports_credentials requires a concrete
+    # origin to echo back, and browsers reject a wildcard with credentials.
+    # Restricting to private ranges keeps this from being an open door if
+    # DEPLOY_ENV is ever wrong on a public host.
+    #
+    # A compiled pattern is passed rather than a regex-looking string because
+    # flask-cors treats re.Pattern explicitly instead of guessing.
+    CORS_ORIGINS = [re.compile(
+        r'^http://('
+        r'localhost'
+        r'|127\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+        r'|\[::1\]'
+        r'|10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+        r'|192\.168\.\d{1,3}\.\d{1,3}'
+        r'|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}'
+        r'):' + re.escape(FRONTEND_PORT) + r'$'
+    )]
+
+CORS(app, supports_credentials=True, origins=CORS_ORIGINS)
+
+# The session cookie is scoped to the real domain in production. Locally that
+# domain cannot be set by a localhost origin at all, and Secure would be
+# rejected over plain http, so both are relaxed outside production.
+COOKIE_DOMAIN = '.memoryillumination.com' if IS_PRODUCTION else None
+COOKIE_SECURE = IS_PRODUCTION
 
 # Config
 app.config.update(
@@ -58,8 +159,6 @@ app.config.update(
 resend.api_key = os.environ.get('EMAIL_API_KEY')
 MAIL_FROM = os.environ.get('MAIL_FROM', 'Memory Illumination <noreply@mail.memoryillumination.com>')
 MAIL_REPLY_TO = os.environ.get('MAIL_REPLY_TO', 'support@memoryillumination.com')
-API_BASE_URL = os.environ.get('API_BASE_URL', 'https://api.memoryillumination.com')
-SITE_BASE_URL = os.environ.get('SITE_BASE_URL', 'https://memoryillumination.com')
 
 # Signing secret for the Resend webhook (Svix format, "whsec_..."). Without it
 # the webhook endpoint rejects everything — an unauthenticated suppression
@@ -88,6 +187,14 @@ CONFIRM_RESEND_LIMIT = 3          # max confirmation emails per address per wind
 # arrive". This only rejects input that can't be an address at all, so we
 # don't hand obvious garbage to Resend and rack up bounces.
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$')
+
+if not app.config['SECRET_KEY']:
+    # Without this URLSafeTimedSerializer(None) raises an opaque TypeError at
+    # import and every uWSGI worker dies with no indication why.
+    raise RuntimeError(
+        "SECRET_KEY is not set. Checked .env at: "
+        + (ENV_PATH or f"none found; looked in {', '.join(ENV_CANDIDATES)}")
+    )
 
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 ph = PasswordHasher()
@@ -183,6 +290,31 @@ def init_db():
             detail     TEXT,
             created_at INTEGER NOT NULL
         )
+    ''')
+
+    # Async GPU jobs. Lives in SQLite rather than process memory for the same
+    # reason confirmation_sends does: uWSGI runs 4 worker processes, so the
+    # request that polls a job is usually not the one that created it.
+    #
+    # Result bytes are deliberately NOT stored here. Modal retains outputs for
+    # up to 7 days, so /jobs/<id>/result re-fetches from the FunctionCall and
+    # SQLite only holds the metadata needed to authorize and label that fetch.
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS jobs (
+            id           TEXT PRIMARY KEY,
+            call_id      TEXT NOT NULL,
+            owner        TEXT NOT NULL,
+            is_free_tier INTEGER NOT NULL,
+            cold_start   INTEGER NOT NULL,
+            status       TEXT NOT NULL,
+            error        TEXT,
+            created_at   INTEGER NOT NULL,
+            finished_at  INTEGER
+        )
+    ''')
+    conn.execute('''
+        CREATE INDEX IF NOT EXISTS idx_jobs_created
+        ON jobs (created_at)
     ''')
 
     conn.commit()
@@ -618,10 +750,10 @@ def login():
                     "session",
                     value=token,
                     max_age=604800,
-                    secure=True,
+                    secure=COOKIE_SECURE,
                     httponly=True,
                     samesite="Lax",
-                    domain=".memoryillumination.com"
+                    domain=COOKIE_DOMAIN
                 )
                 return response
         except VerifyMismatchError: pass
@@ -654,10 +786,10 @@ def logout():
         "session",
         value="",
         max_age=0,
-        secure=True,
+        secure=COOKIE_SECURE,
         httponly=True,
         samesite="Lax",
-        domain=".memoryillumination.com"
+        domain=COOKIE_DOMAIN
     )
     return response
 
@@ -791,35 +923,43 @@ def normalize_image(input_data):
 #
 # WORKER_API_URL = "http://127.0.0.1:5001/generate"
 #
-# def run_local_diffusion_workflow(image_bytes, inference_params=None):
-#     """
-#     Ships raw user image bytes directly over local loopback to our continuous
-#     diffusers worker engine on port 5001 and returns the finished line art bytes.
-#     inference_params (optional dict) may carry prompt/num_inference_steps/
-#     guidance_scale overrides for tuning without restarting the worker.
-#     """
-#     try:
-#         # Wrap the raw image into standard multipart form data
-#         files = {'image': ('input.png', image_bytes, 'image/png')}
-#         data = {k: v for k, v in (inference_params or {}).items() if v is not None}
-#
-#         # Dispatch to our persistent background worker daemon
-#         print("Routing image payload to hot local VRAM engine...")
-#         response = requests.post(WORKER_API_URL, files=files, data=data, timeout=90)
-#
-#         if response.status_code != 200:
-#             print(f"❌ Worker rejected payload: {response.text}")
-#             raise ValueError(f"Inference Engine Error: {response.text}")
-#
-#         return response.content
-#     except Exception as e:
-#         print(f"❌ Loopback communication failure to model worker: {e}")
-#         raise e
+def run_local_diffusion_workflow(image_bytes, inference_params=None):
+    """
+    Ships raw user image bytes over loopback to the resident diffusers worker
+    (flux_1_kontext.py, port 5001) and returns the finished line art bytes.
+
+    Synchronous by nature: the worker answers with the PNG on the same request,
+    so this path does NOT create a job row and the polling machinery is not
+    exercised. Set INFERENCE_BACKEND=modal to test that.
+
+    inference_params (optional dict) may carry prompt/num_inference_steps/
+    guidance_scale overrides for tuning without restarting the worker.
+    """
+    try:
+        files = {'image': ('input.png', image_bytes, 'image/png')}
+        data = {k: v for k, v in (inference_params or {}).items() if v is not None}
+
+        print(f"Routing image payload to local worker at {LOCAL_WORKER_URL}...")
+        response = requests.post(LOCAL_WORKER_URL, files=files, data=data, timeout=180)
+
+        if response.status_code != 200:
+            print(f"❌ Worker rejected payload: {response.text}")
+            raise ValueError(f"Inference Engine Error: {response.text}")
+
+        return response.content
+    except Exception as e:
+        print(f"❌ Loopback communication failure to model worker: {e}")
+        raise e
 # ---------------------------------------------------------------------------
 
 
 def run_remote_diffusion_workflow(image_bytes):
     """
+    SUPERSEDED for the request path by spawn_remote_diffusion(): /upload-endpoint
+    no longer blocks on the GPU. Kept because the commented-out local-inference
+    restoration above is written in terms of run_diffusion_workflow(); delete
+    both once that path is either restored or abandoned.
+
     Dispatches to the Modal-hosted GPU worker (backend/flux_1_kontext_modal.py).
     Only reachable when APP_ENV=production; `modal` is imported lazily so it
     isn't a hard dependency for local development.
@@ -835,11 +975,156 @@ def run_remote_diffusion_workflow(image_bytes):
 
 
 def run_diffusion_workflow(image_bytes, inference_params=None):
-    # Development branch commented out along with run_local_diffusion_workflow.
-    # Every caller now reaches Modal regardless of APP_ENV.
-    # if APP_ENV != 'production':
-    #     return run_local_diffusion_workflow(image_bytes, inference_params)
+    """
+    Synchronous diffusion, used when INFERENCE_BACKEND=local. The Modal path
+    does not come through here: it is dispatched asynchronously straight from
+    /upload-endpoint via spawn_remote_diffusion().
+    """
+    if not USE_MODAL:
+        return run_local_diffusion_workflow(image_bytes, inference_params)
     return run_remote_diffusion_workflow(image_bytes)
+
+# --- ASYNC GPU JOBS ---
+
+# Wall-clock profiles that drive the client's progress bar. These are estimates,
+# not measurements: the client anchors them to real events (upload completion,
+# poll-confirmed elapsed time, actual completion) and eases between those
+# anchors. Tune from the "⏱️  upload-endpoint timing" and "⏱️  modal worker
+# timing" lines in the logs.
+WARM_ESTIMATE_SECONDS = 20   # container already up: inference + transfer only
+COLD_ESTIMATE_SECONDS = 80   # adds @modal.enter() loading FLUX bf16 onto the A100
+
+# flux_1_kontext_modal.py sets scaledown_window=300, so a container idle longer
+# than that is gone and the next call pays a cold start. Held slightly under the
+# real window: predicting cold and finishing early reads better than the reverse.
+CONTAINER_IDLE_TIMEOUT = 270
+
+# Job rows are metadata only. Keep a day for debugging, then sweep.
+JOB_RETENTION_SECONDS = 86400
+
+# Ceiling on retrying a job we cannot reach Modal about. flux_1_kontext_modal.py
+# sets the function timeout to 600s, so past this the worker cannot still be
+# running and the job is genuinely lost rather than merely unreachable.
+JOB_MAX_AGE_SECONDS = 660
+
+
+def predict_cold_start(conn):
+    """
+    True if the next Modal call will likely wait on a container boot.
+
+    Modal's API cannot tell us this directly: InputStatus.PENDING covers both
+    "queued, no container yet" and "actively running", and get_call_graph() is
+    documented as best-effort and not real-time. So we infer it from our own
+    dispatch history, which tracks container warmth closely enough to pick a
+    duration profile.
+    """
+    row = conn.execute(
+        "SELECT MAX(COALESCE(finished_at, created_at)) AS last_seen FROM jobs"
+    ).fetchone()
+    last_seen = row['last_seen'] if row else None
+    if last_seen is None:
+        return True
+    return (int(time.time()) - last_seen) > CONTAINER_IDLE_TIMEOUT
+
+
+def estimate_seconds(cold_start):
+    return COLD_ESTIMATE_SECONDS if cold_start else WARM_ESTIMATE_SECONDS
+
+
+def job_owner(token, ip):
+    """
+    Identity a job is bound to, so one caller cannot poll another's job.
+    Falls back to IP for the anonymous uploads this endpoint still allows.
+    """
+    try:
+        return f"user:{serializer.loads(token, salt='session', max_age=604800)}"
+    except Exception:
+        return f"ip:{ip}"
+
+
+def spawn_remote_diffusion(image_bytes):
+    """Dispatch to the Modal GPU worker without waiting; returns the call id."""
+    import modal
+    remote_model = modal.Cls.from_name("coloring-book-flux", "ColoringModel")
+    return remote_model().process.spawn(image_bytes).object_id
+
+
+# Modal failures that say nothing about the job itself, only about our ability
+# to ask after it right now. Resolved by name and cached on first use, so a
+# modal version that renames or drops one of these degrades to "not transient"
+# rather than breaking the import.
+_MODAL_TRANSIENT_ERRORS = None
+
+def modal_transient_errors():
+    global _MODAL_TRANSIENT_ERRORS
+    if _MODAL_TRANSIENT_ERRORS is None:
+        import modal
+        names = (
+            'ConnectionError',        # could not reach the Modal servers
+            'ServiceError',           # basic client/server communication failed
+            'InternalError',          # internal error on Modal's side
+            'InternalFailure',        # documented as explicitly retriable
+            'ResourceExhaustedError', # server-side resource exhausted
+            'ClientClosed',
+        )
+        _MODAL_TRANSIENT_ERRORS = tuple(
+            getattr(modal.exception, n) for n in names if hasattr(modal.exception, n)
+        )
+    return _MODAL_TRANSIENT_ERRORS
+
+
+def fetch_job_result(call_id):
+    """
+    ('pending', None) | ('transient', message) | ('done', png_bytes) | ('error', message)
+
+    The 'transient' state is the important distinction: a failure to reach
+    Modal is not a failed job, and callers must not record it as terminal —
+    the GPU work may well have succeeded. Only 'error' is a verdict on the job.
+    """
+    import modal
+    try:
+        result = modal.FunctionCall.from_id(call_id).get(timeout=0)
+    except TimeoutError:
+        # The *builtin* TimeoutError: the worker is still going. Modal's own
+        # exception.TimeoutError is a separate class deriving from modal.Error,
+        # so this clause does not shadow the two modal timeouts caught below.
+        return 'pending', None
+    except modal.exception.OutputExpiredError:
+        return 'error', "That result expired before it was downloaded. Please try again."
+    except modal.exception.FunctionTimeoutError:
+        return 'error', "That image took too long to generate. Please try again."
+    except modal_transient_errors() as e:
+        print(f"⚠️  Modal unreachable for job {call_id} ({type(e).__name__}: {e})")
+        return 'transient', "Could not reach the image worker."
+    except Exception as e:
+        # Anything else is the job itself failing, including whatever the
+        # remote function raised, which arrives here as its own type.
+        print(f"❌ Modal job {call_id} failed ({type(e).__name__}): {e}")
+        return 'error', "Something went wrong processing that image. Please try again."
+
+    try:
+        return 'done', result["flux_sketch"]
+    except (KeyError, TypeError) as e:
+        # Kept inside a guard so a payload-shape change cannot escape as a 500
+        # and strand the job row as pending.
+        print(f"❌ Modal job {call_id} returned an unexpected payload: {e!r}")
+        return 'error', "Something went wrong processing that image. Please try again."
+
+
+def load_job(conn, job_id, owner):
+    """The job row, but only for the caller that created it."""
+    return conn.execute(
+        "SELECT * FROM jobs WHERE id = ? AND owner = ?", (job_id, owner)
+    ).fetchone()
+
+
+def sweep_old_jobs(conn):
+    if random.random() < 0.05:
+        conn.execute(
+            "DELETE FROM jobs WHERE created_at < ?",
+            (int(time.time()) - JOB_RETENTION_SECONDS,)
+        )
+
 
 @app.route('/upload-endpoint', methods=['POST'])
 def upload_file():
@@ -891,22 +1176,63 @@ def upload_file():
 
     t_auth = time.perf_counter()
 
+    # Execution Routing Split — three destinations:
+    #
+    #   featureB + INFERENCE_BACKEND=modal  asynchronous. The remote GPU can run
+    #       for a minute or more, and pinning one of only 4 uWSGI workers that
+    #       long is what breaks first behind a proxy timeout, so the caller gets
+    #       a job id and polls /jobs/<id>.
+    #   featureB + INFERENCE_BACKEND=local  synchronous. The resident worker on
+    #       loopback answers on the same request, so there is no job to poll.
+    #   no featureB                          synchronous OpenCV, sub-second.
+    #
+    # Both synchronous routes return the PNG directly and the client branches on
+    # the response type, so only the Modal route exercises the polling path.
+    if settings.get('featureB') and USE_MODAL:
+        # rembg/cv2 pre-flatten pass, still skipped entirely:
+        # pre_simplified = simplify_for_coloring(input_data)
+        conn = get_db_connection()
+        try:
+            cold_start = predict_cold_start(conn)
+            call_id = spawn_remote_diffusion(input_data)
+        except Exception as e:
+            conn.close()
+            print(f"❌ Modal dispatch failure: {e}")
+            return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500
+
+        job_id = uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO jobs (id, call_id, owner, is_free_tier, cold_start, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (job_id, call_id, job_owner(token, ip), int(is_free_tier), int(cold_start), int(time.time()))
+        )
+        sweep_old_jobs(conn)
+        conn.commit()
+        conn.close()
+
+        print(
+            "⏱️  upload-endpoint dispatch — "
+            f"read: {t_read - t_start:.3f}s, "
+            f"normalize: {t_normalize - t_read:.3f}s, "
+            f"auth: {t_auth - t_normalize:.3f}s, "
+            f"job: {job_id}, cold_start: {cold_start}"
+        )
+        return jsonify({
+            "job_id": job_id,
+            "cold_start": cold_start,
+            "estimate_seconds": estimate_seconds(cold_start),
+        }), 202
+
     try:
-        # Execution Routing Split
         if settings.get('featureB'):
-            # Send the normalized image straight to the Modal GPU worker.
-            # Everything else in this branch is commented out:
-            #
-            # inference_params was only ever read by the local loopback worker:
-            # inference_params = {
-            #     'prompt': settings.get('prompt'),
-            #     'num_inference_steps': settings.get('num_inference_steps'),
-            #     'guidance_scale': settings.get('guidance_scale'),
-            # }
-            #
-            # rembg/cv2 pre-flatten pass, now skipped entirely:
-            # pre_simplified = simplify_for_coloring(input_data)
-            result_bytes = run_diffusion_workflow(input_data)
+            # INFERENCE_BACKEND=local. These params are read only by the local
+            # worker; the Modal worker hardcodes its own.
+            inference_params = {
+                'prompt': settings.get('prompt'),
+                'num_inference_steps': settings.get('num_inference_steps'),
+                'guidance_scale': settings.get('guidance_scale'),
+            }
+            result_bytes = run_diffusion_workflow(input_data, inference_params)
         else:
             # High speed OpenCV classic fallback path
             img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
@@ -939,6 +1265,119 @@ def upload_file():
     )
 
     return send_file(io.BytesIO(result_bytes), mimetype='image/png')
+
+
+def job_phase(row, elapsed):
+    """
+    Coarse label for what the worker is most likely doing right now.
+
+    A cold start spends its first stretch in @modal.enter() loading FLUX onto
+    the GPU before denoising begins, so the difference between the two duration
+    profiles is roughly the model-load window. Predicted, not observed — see
+    predict_cold_start().
+    """
+    if row['cold_start'] and elapsed < (COLD_ESTIMATE_SECONDS - WARM_ESTIMATE_SECONDS):
+        return 'warming'
+    return 'generating'
+
+
+@app.route('/jobs/<job_id>', methods=['GET'])
+def job_status(job_id):
+    ip = client_ip()
+    owner = job_owner(request.cookies.get('session', ''), ip)
+
+    # try/finally rather than close-per-branch: an unexpected raise between here
+    # and the end used to leak the connection for the life of the worker.
+    conn = get_db_connection()
+    try:
+        row = load_job(conn, job_id, owner)
+        if row is None:
+            return jsonify({"error": "Job not found."}), 404
+
+        elapsed = int(time.time()) - row['created_at']
+        payload = {
+            "status": row['status'],
+            "elapsed": elapsed,
+            "cold_start": bool(row['cold_start']),
+            "estimate_seconds": estimate_seconds(row['cold_start']),
+        }
+
+        # Terminal states are recorded, so don't call Modal again for them.
+        if row['status'] != 'pending':
+            if row['status'] == 'error':
+                payload['error'] = row['error']
+            return jsonify(payload), 200
+
+        status, result = fetch_job_result(row['call_id'])
+
+        if status == 'transient':
+            # We could not reach Modal, which is not a verdict on the job — the
+            # GPU work may have succeeded. Recording it as terminal here would
+            # permanently kill a job over one blip, so report it as still
+            # pending and let the next poll ask again. Give up only once the
+            # worker could not possibly still be running.
+            if elapsed <= JOB_MAX_AGE_SECONDS:
+                status = 'pending'
+            else:
+                status = 'error'
+                result = "Lost contact with the image worker. Please try again."
+
+        if status == 'pending':
+            payload['phase'] = job_phase(row, elapsed)
+            return jsonify(payload), 200
+
+        # Record the terminal state so later polls (and a reload) are answered from
+        # SQLite. The bytes stay with Modal; /jobs/<id>/result re-fetches them.
+        error = result if status == 'error' else None
+        conn.execute(
+            "UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
+            (status, error, int(time.time()), job_id)
+        )
+        conn.commit()
+
+        payload['status'] = status
+        if status == 'error':
+            payload['error'] = error
+        return jsonify(payload), 200
+    finally:
+        conn.close()
+
+
+@app.route('/jobs/<job_id>/result', methods=['GET'])
+def job_result(job_id):
+    ip = client_ip()
+    owner = job_owner(request.cookies.get('session', ''), ip)
+
+    conn = get_db_connection()
+    row = load_job(conn, job_id, owner)
+    conn.close()
+    if row is None:
+        return jsonify({"error": "Job not found."}), 404
+
+    status, result = fetch_job_result(row['call_id'])
+    if status == 'pending':
+        return jsonify({"error": "That image isn't ready yet."}), 409
+    if status == 'transient':
+        # 503, not 500: the image is probably fine and retrying is the right move.
+        response = jsonify({"error": "Couldn't reach the image worker. Please try again in a moment."})
+        response.headers['Retry-After'] = '5'
+        return response, 503
+    if status == 'error':
+        return jsonify({"error": result}), 500
+
+    result_bytes = result
+    # Tier was captured when the job was submitted, so a mid-job upgrade or
+    # session expiry can't change the terms the image was generated under.
+    if WATERMARK_AVAILABLE and row['is_free_tier']:
+        # Best-effort, matching /upload-endpoint: a watermarking failure must
+        # not cost the user the image they already paid GPU time for.
+        try:
+            result_bytes = apply_watermark(result_bytes)
+        except Exception as e:
+            print(f"⚠️  Watermarking failed, returning unwatermarked image: {e}")
+
+    return send_file(io.BytesIO(result_bytes), mimetype='image/png')
+
 
 if __name__ == '__main__':
     # Listening on all interfaces for network access

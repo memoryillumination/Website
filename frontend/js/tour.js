@@ -118,5 +118,5 @@ function startTour(steps, { apiBaseUrl, onComplete } = {}) {
 const UPLOAD_TOUR_STEPS = [
   { selector: "#file-input", text: "Start here — choose a photo from your device." },
   { selector: "#style-options", text: "Pick Sketch or Coloring Page for your style." },
-  { selector: "button[type=\"submit\"]", text: "Hit Upload and we'll turn it into your result." },
+  { selector: 'button[type="submit"]', text: "Hit Upload and we'll turn it into your result." },
 ];

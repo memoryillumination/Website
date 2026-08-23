@@ -4,11 +4,12 @@
   "description": "",
   "main": "main.js",
   "scripts": {
-    "build": "tailwindcss -i ./css/input.css -o ./css/output.css",
+    "build": "python3 ../scripts/gen_frontend_config.py && tailwindcss -i ./css/input.css -o ./css/output.css",
     "watch": "tailwindcss -i ./css/input.css -o ./css/output.css --watch",
     "format": "prettier --write \"**/*.{html,css,js,json}\"",
     "lint": "prettier --check \"**/*.{html,css,js,json}\"",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "config": "python3 ../scripts/gen_frontend_config.py"
   },
   "keywords": [],
   "author": "",
