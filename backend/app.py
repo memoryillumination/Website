@@ -889,6 +889,11 @@ CONTAINER_IDLE_TIMEOUT = 270
 # Job rows are metadata only. Keep a day for debugging, then sweep.
 JOB_RETENTION_SECONDS = 86400
 
+# Ceiling on retrying a job we cannot reach Modal about. flux_1_kontext_modal.py
+# sets the function timeout to 600s, so past this the worker cannot still be
+# running and the job is genuinely lost rather than merely unreachable.
+JOB_MAX_AGE_SECONDS = 660
+
 
 def predict_cold_start(conn):
     """
@@ -931,25 +936,66 @@ def spawn_remote_diffusion(image_bytes):
     return remote_model().process.spawn(image_bytes).object_id
 
 
+# Modal failures that say nothing about the job itself, only about our ability
+# to ask after it right now. Resolved by name and cached on first use, so a
+# modal version that renames or drops one of these degrades to "not transient"
+# rather than breaking the import.
+_MODAL_TRANSIENT_ERRORS = None
+
+def modal_transient_errors():
+    global _MODAL_TRANSIENT_ERRORS
+    if _MODAL_TRANSIENT_ERRORS is None:
+        import modal
+        names = (
+            'ConnectionError',        # could not reach the Modal servers
+            'ServiceError',           # basic client/server communication failed
+            'InternalError',          # internal error on Modal's side
+            'InternalFailure',        # documented as explicitly retriable
+            'ResourceExhaustedError', # server-side resource exhausted
+            'ClientClosed',
+        )
+        _MODAL_TRANSIENT_ERRORS = tuple(
+            getattr(modal.exception, n) for n in names if hasattr(modal.exception, n)
+        )
+    return _MODAL_TRANSIENT_ERRORS
+
+
 def fetch_job_result(call_id):
     """
-    ('pending', None) | ('done', png_bytes) | ('error', message)
+    ('pending', None) | ('transient', message) | ('done', png_bytes) | ('error', message)
 
-    get(timeout=0) polls without blocking: TimeoutError means the worker is
-    still going, OutputExpiredError means Modal has aged the result out (it
-    retains outputs for ~7 days).
+    The 'transient' state is the important distinction: a failure to reach
+    Modal is not a failed job, and callers must not record it as terminal —
+    the GPU work may well have succeeded. Only 'error' is a verdict on the job.
     """
     import modal
     try:
         result = modal.FunctionCall.from_id(call_id).get(timeout=0)
     except TimeoutError:
+        # The *builtin* TimeoutError: the worker is still going. Modal's own
+        # exception.TimeoutError is a separate class deriving from modal.Error,
+        # so this clause does not shadow the two modal timeouts caught below.
         return 'pending', None
     except modal.exception.OutputExpiredError:
         return 'error', "That result expired before it was downloaded. Please try again."
+    except modal.exception.FunctionTimeoutError:
+        return 'error', "That image took too long to generate. Please try again."
+    except modal_transient_errors() as e:
+        print(f"⚠️  Modal unreachable for job {call_id} ({type(e).__name__}: {e})")
+        return 'transient', "Could not reach the image worker."
     except Exception as e:
-        print(f"❌ Modal job {call_id} failed: {e}")
+        # Anything else is the job itself failing, including whatever the
+        # remote function raised, which arrives here as its own type.
+        print(f"❌ Modal job {call_id} failed ({type(e).__name__}): {e}")
         return 'error', "Something went wrong processing that image. Please try again."
-    return 'done', result["flux_sketch"]
+
+    try:
+        return 'done', result["flux_sketch"]
+    except (KeyError, TypeError) as e:
+        # Kept inside a guard so a payload-shape change cannot escape as a 500
+        # and strand the job row as pending.
+        print(f"❌ Modal job {call_id} returned an unexpected payload: {e!r}")
+        return 'error', "Something went wrong processing that image. Please try again."
 
 
 def load_job(conn, job_id, owner):
@@ -1121,48 +1167,61 @@ def job_status(job_id):
     ip = client_ip()
     owner = job_owner(request.cookies.get('session', ''), ip)
 
+    # try/finally rather than close-per-branch: an unexpected raise between here
+    # and the end used to leak the connection for the life of the worker.
     conn = get_db_connection()
-    row = load_job(conn, job_id, owner)
-    if row is None:
-        conn.close()
-        return jsonify({"error": "Job not found."}), 404
+    try:
+        row = load_job(conn, job_id, owner)
+        if row is None:
+            return jsonify({"error": "Job not found."}), 404
 
-    elapsed = int(time.time()) - row['created_at']
-    payload = {
-        "status": row['status'],
-        "elapsed": elapsed,
-        "cold_start": bool(row['cold_start']),
-        "estimate_seconds": estimate_seconds(row['cold_start']),
-    }
+        elapsed = int(time.time()) - row['created_at']
+        payload = {
+            "status": row['status'],
+            "elapsed": elapsed,
+            "cold_start": bool(row['cold_start']),
+            "estimate_seconds": estimate_seconds(row['cold_start']),
+        }
 
-    # Terminal states are recorded, so don't call Modal again for them.
-    if row['status'] != 'pending':
-        conn.close()
-        if row['status'] == 'error':
-            payload['error'] = row['error']
+        # Terminal states are recorded, so don't call Modal again for them.
+        if row['status'] != 'pending':
+            if row['status'] == 'error':
+                payload['error'] = row['error']
+            return jsonify(payload), 200
+
+        status, result = fetch_job_result(row['call_id'])
+
+        if status == 'transient':
+            # We could not reach Modal, which is not a verdict on the job — the
+            # GPU work may have succeeded. Recording it as terminal here would
+            # permanently kill a job over one blip, so report it as still
+            # pending and let the next poll ask again. Give up only once the
+            # worker could not possibly still be running.
+            if elapsed <= JOB_MAX_AGE_SECONDS:
+                status = 'pending'
+            else:
+                status = 'error'
+                result = "Lost contact with the image worker. Please try again."
+
+        if status == 'pending':
+            payload['phase'] = job_phase(row, elapsed)
+            return jsonify(payload), 200
+
+        # Record the terminal state so later polls (and a reload) are answered from
+        # SQLite. The bytes stay with Modal; /jobs/<id>/result re-fetches them.
+        error = result if status == 'error' else None
+        conn.execute(
+            "UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
+            (status, error, int(time.time()), job_id)
+        )
+        conn.commit()
+
+        payload['status'] = status
+        if status == 'error':
+            payload['error'] = error
         return jsonify(payload), 200
-
-    status, result = fetch_job_result(row['call_id'])
-
-    if status == 'pending':
+    finally:
         conn.close()
-        payload['phase'] = job_phase(row, elapsed)
-        return jsonify(payload), 200
-
-    # Record the terminal state so later polls (and a reload) are answered from
-    # SQLite. The bytes stay with Modal; /jobs/<id>/result re-fetches them.
-    error = result if status == 'error' else None
-    conn.execute(
-        "UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
-        (status, error, int(time.time()), job_id)
-    )
-    conn.commit()
-    conn.close()
-
-    payload['status'] = status
-    if status == 'error':
-        payload['error'] = error
-    return jsonify(payload), 200
 
 
 @app.route('/jobs/<job_id>/result', methods=['GET'])
@@ -1179,6 +1238,11 @@ def job_result(job_id):
     status, result = fetch_job_result(row['call_id'])
     if status == 'pending':
         return jsonify({"error": "That image isn't ready yet."}), 409
+    if status == 'transient':
+        # 503, not 500: the image is probably fine and retrying is the right move.
+        response = jsonify({"error": "Couldn't reach the image worker. Please try again in a moment."})
+        response.headers['Retry-After'] = '5'
+        return response, 503
     if status == 'error':
         return jsonify({"error": result}), 500
 

@@ -120,7 +120,11 @@ window.addEventListener("DOMContentLoaded", () => {
     clearResult(revokeDelayMs);
     setProgress(0);
     statusMessage.textContent = "";
-    uploadForm.reset();
+    // Clear the chosen file, but deliberately NOT the whole form: reset() would
+    // also clear the style checkboxes back to their unchecked defaults, which
+    // silently sends the next upload down the OpenCV path instead of the one
+    // the user picked.
+    fileInput.value = "";
     showView("idle");
   }
 
