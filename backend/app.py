@@ -20,16 +20,35 @@ import requests
 
 pillow_heif.register_heif_opener()
 
-load_dotenv()
+# .env lives at the project root, one level up, so a single file serves the
+# backend and the frontend config generator (scripts/gen_frontend_config.py).
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
 
 # Was loaded once at startup so per-request calls to simplify_for_coloring()
 # didn't pay session/model init cost on every upload.
 # REMBG_SESSION = rembg_new_session('u2net')
 
-# APP_ENV selects which GPU backend featureB routes to: "development" (default)
-# uses the local worker over loopback HTTP; "production" uses the Modal-hosted
-# worker. Set APP_ENV=production in .env to switch.
-APP_ENV = os.environ.get('APP_ENV', 'development')
+# Two orthogonal switches, replacing the old single APP_ENV:
+#
+# DEPLOY_ENV -- where the frontend is served relative to this API. In
+#   development both run on this machine (frontend :8000, API :5000) so the
+#   browser talks to localhost and CORS must allow it; in production they are
+#   hosted separately. Defaults to production so a missing value fails closed
+#   on CORS rather than quietly allowing localhost in a deployed environment.
+#
+# INFERENCE_BACKEND -- where diffusion runs, which is a genuinely separate
+#   question: you can point a local frontend at the Modal GPU, or run the local
+#   worker behind a production frontend.
+DEPLOY_ENV = os.environ.get('DEPLOY_ENV', 'production')
+IS_PRODUCTION = DEPLOY_ENV == 'production'
+
+INFERENCE_BACKEND = os.environ.get('INFERENCE_BACKEND', 'modal')
+USE_MODAL = INFERENCE_BACKEND == 'modal'
+
+# The local worker is flux_1_kontext.py, a separate Flask process holding the
+# quantised model resident on the Intel XPU. Started independently of this app.
+LOCAL_WORKER_URL = os.environ.get('LOCAL_WORKER_URL', 'http://127.0.0.1:5001/generate')
 
 # When True, output for free-tier (and unauthenticated) callers is watermarked.
 # Off by default because MI_Watermark.png is not checked into the repo — see the
@@ -45,7 +64,54 @@ app = Flask(__name__)
 # front-end is put in place.
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
+# Origins are derived from DEPLOY_ENV but can be overridden explicitly. The
+# localhost entries are added only outside production: allowing them there
+# would let a page on any visitor's own machine call this API with credentials.
+SITE_BASE_URL = os.environ.get(
+    'SITE_BASE_URL',
+    'https://memoryillumination.com' if IS_PRODUCTION else 'http://localhost:8000',
+)
+API_BASE_URL = os.environ.get(
+    'API_BASE_URL',
+    'https://api.memoryillumination.com' if IS_PRODUCTION else 'http://localhost:5000',
+)
+
+# Port the frontend dev server listens on, used to build the permitted origin.
+FRONTEND_PORT = os.environ.get('FRONTEND_PORT', '8000')
+
+if IS_PRODUCTION:
+    CORS_ORIGINS = [SITE_BASE_URL]
+else:
+    # In development the frontend is reachable over the LAN as well as on
+    # loopback -- browsing from a phone or another machine at
+    # http://192.168.1.116:8000 sends that as the Origin -- so match loopback
+    # plus the RFC1918 private ranges on the frontend port.
+    #
+    # A literal '*' is not an option: supports_credentials requires a concrete
+    # origin to echo back, and browsers reject a wildcard with credentials.
+    # Restricting to private ranges keeps this from being an open door if
+    # DEPLOY_ENV is ever wrong on a public host.
+    #
+    # A compiled pattern is passed rather than a regex-looking string because
+    # flask-cors treats re.Pattern explicitly instead of guessing.
+    CORS_ORIGINS = [re.compile(
+        r'^http://('
+        r'localhost'
+        r'|127\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+        r'|\[::1\]'
+        r'|10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+        r'|192\.168\.\d{1,3}\.\d{1,3}'
+        r'|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}'
+        r'):' + re.escape(FRONTEND_PORT) + r'$'
+    )]
+
+CORS(app, supports_credentials=True, origins=CORS_ORIGINS)
+
+# The session cookie is scoped to the real domain in production. Locally that
+# domain cannot be set by a localhost origin at all, and Secure would be
+# rejected over plain http, so both are relaxed outside production.
+COOKIE_DOMAIN = '.memoryillumination.com' if IS_PRODUCTION else None
+COOKIE_SECURE = IS_PRODUCTION
 
 # Config
 app.config.update(
@@ -58,8 +124,6 @@ app.config.update(
 resend.api_key = os.environ.get('EMAIL_API_KEY')
 MAIL_FROM = os.environ.get('MAIL_FROM', 'Memory Illumination <noreply@mail.memoryillumination.com>')
 MAIL_REPLY_TO = os.environ.get('MAIL_REPLY_TO', 'support@memoryillumination.com')
-API_BASE_URL = os.environ.get('API_BASE_URL', 'https://api.memoryillumination.com')
-SITE_BASE_URL = os.environ.get('SITE_BASE_URL', 'https://memoryillumination.com')
 
 # Signing secret for the Resend webhook (Svix format, "whsec_..."). Without it
 # the webhook endpoint rejects everything — an unauthenticated suppression
@@ -643,10 +707,10 @@ def login():
                     "session",
                     value=token,
                     max_age=604800,
-                    secure=True,
+                    secure=COOKIE_SECURE,
                     httponly=True,
                     samesite="Lax",
-                    domain=".memoryillumination.com"
+                    domain=COOKIE_DOMAIN
                 )
                 return response
         except VerifyMismatchError: pass
@@ -679,10 +743,10 @@ def logout():
         "session",
         value="",
         max_age=0,
-        secure=True,
+        secure=COOKIE_SECURE,
         httponly=True,
         samesite="Lax",
-        domain=".memoryillumination.com"
+        domain=COOKIE_DOMAIN
     )
     return response
 
@@ -816,30 +880,33 @@ def normalize_image(input_data):
 #
 # WORKER_API_URL = "http://127.0.0.1:5001/generate"
 #
-# def run_local_diffusion_workflow(image_bytes, inference_params=None):
-#     """
-#     Ships raw user image bytes directly over local loopback to our continuous
-#     diffusers worker engine on port 5001 and returns the finished line art bytes.
-#     inference_params (optional dict) may carry prompt/num_inference_steps/
-#     guidance_scale overrides for tuning without restarting the worker.
-#     """
-#     try:
-#         # Wrap the raw image into standard multipart form data
-#         files = {'image': ('input.png', image_bytes, 'image/png')}
-#         data = {k: v for k, v in (inference_params or {}).items() if v is not None}
-#
-#         # Dispatch to our persistent background worker daemon
-#         print("Routing image payload to hot local VRAM engine...")
-#         response = requests.post(WORKER_API_URL, files=files, data=data, timeout=90)
-#
-#         if response.status_code != 200:
-#             print(f"❌ Worker rejected payload: {response.text}")
-#             raise ValueError(f"Inference Engine Error: {response.text}")
-#
-#         return response.content
-#     except Exception as e:
-#         print(f"❌ Loopback communication failure to model worker: {e}")
-#         raise e
+def run_local_diffusion_workflow(image_bytes, inference_params=None):
+    """
+    Ships raw user image bytes over loopback to the resident diffusers worker
+    (flux_1_kontext.py, port 5001) and returns the finished line art bytes.
+
+    Synchronous by nature: the worker answers with the PNG on the same request,
+    so this path does NOT create a job row and the polling machinery is not
+    exercised. Set INFERENCE_BACKEND=modal to test that.
+
+    inference_params (optional dict) may carry prompt/num_inference_steps/
+    guidance_scale overrides for tuning without restarting the worker.
+    """
+    try:
+        files = {'image': ('input.png', image_bytes, 'image/png')}
+        data = {k: v for k, v in (inference_params or {}).items() if v is not None}
+
+        print(f"Routing image payload to local worker at {LOCAL_WORKER_URL}...")
+        response = requests.post(LOCAL_WORKER_URL, files=files, data=data, timeout=180)
+
+        if response.status_code != 200:
+            print(f"❌ Worker rejected payload: {response.text}")
+            raise ValueError(f"Inference Engine Error: {response.text}")
+
+        return response.content
+    except Exception as e:
+        print(f"❌ Loopback communication failure to model worker: {e}")
+        raise e
 # ---------------------------------------------------------------------------
 
 
@@ -865,10 +932,13 @@ def run_remote_diffusion_workflow(image_bytes):
 
 
 def run_diffusion_workflow(image_bytes, inference_params=None):
-    # Development branch commented out along with run_local_diffusion_workflow.
-    # Every caller now reaches Modal regardless of APP_ENV.
-    # if APP_ENV != 'production':
-    #     return run_local_diffusion_workflow(image_bytes, inference_params)
+    """
+    Synchronous diffusion, used when INFERENCE_BACKEND=local. The Modal path
+    does not come through here: it is dispatched asynchronously straight from
+    /upload-endpoint via spawn_remote_diffusion().
+    """
+    if not USE_MODAL:
+        return run_local_diffusion_workflow(image_bytes, inference_params)
     return run_remote_diffusion_workflow(image_bytes)
 
 # --- ASYNC GPU JOBS ---
@@ -1063,24 +1133,20 @@ def upload_file():
 
     t_auth = time.perf_counter()
 
-    # Execution Routing Split.
+    # Execution Routing Split — three destinations:
     #
-    # The GPU path is dispatched asynchronously. It can run for a minute or
-    # more, and pinning one of only 4 uWSGI workers for that long is what
-    # breaks first behind a proxy timeout. The caller gets a job id and polls
-    # /jobs/<id>. The OpenCV path is sub-second, so it stays synchronous and
-    # returns the PNG directly — the client branches on the response type.
-    if settings.get('featureB'):
-        # Everything else that used to live in this branch is commented out:
-        #
-        # inference_params was only ever read by the local loopback worker:
-        # inference_params = {
-        #     'prompt': settings.get('prompt'),
-        #     'num_inference_steps': settings.get('num_inference_steps'),
-        #     'guidance_scale': settings.get('guidance_scale'),
-        # }
-        #
-        # rembg/cv2 pre-flatten pass, now skipped entirely:
+    #   featureB + INFERENCE_BACKEND=modal  asynchronous. The remote GPU can run
+    #       for a minute or more, and pinning one of only 4 uWSGI workers that
+    #       long is what breaks first behind a proxy timeout, so the caller gets
+    #       a job id and polls /jobs/<id>.
+    #   featureB + INFERENCE_BACKEND=local  synchronous. The resident worker on
+    #       loopback answers on the same request, so there is no job to poll.
+    #   no featureB                          synchronous OpenCV, sub-second.
+    #
+    # Both synchronous routes return the PNG directly and the client branches on
+    # the response type, so only the Modal route exercises the polling path.
+    if settings.get('featureB') and USE_MODAL:
+        # rembg/cv2 pre-flatten pass, still skipped entirely:
         # pre_simplified = simplify_for_coloring(input_data)
         conn = get_db_connection()
         try:
@@ -1115,13 +1181,23 @@ def upload_file():
         }), 202
 
     try:
-        # High speed OpenCV classic fallback path
-        img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
-        inv = 255 - img
-        blur = cv2.GaussianBlur(inv, (21, 21), 0)
-        sketch = cv2.divide(img, 255 - blur, scale=256)
-        _, buffer = cv2.imencode(".png", sketch)
-        result_bytes = bytes(buffer)
+        if settings.get('featureB'):
+            # INFERENCE_BACKEND=local. These params are read only by the local
+            # worker; the Modal worker hardcodes its own.
+            inference_params = {
+                'prompt': settings.get('prompt'),
+                'num_inference_steps': settings.get('num_inference_steps'),
+                'guidance_scale': settings.get('guidance_scale'),
+            }
+            result_bytes = run_diffusion_workflow(input_data, inference_params)
+        else:
+            # High speed OpenCV classic fallback path
+            img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
+            inv = 255 - img
+            blur = cv2.GaussianBlur(inv, (21, 21), 0)
+            sketch = cv2.divide(img, 255 - blur, scale=256)
+            _, buffer = cv2.imencode(".png", sketch)
+            result_bytes = bytes(buffer)
     except Exception as e:
         print(f"❌ Image processing failure: {e}")
         return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500

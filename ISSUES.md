@@ -171,6 +171,25 @@ first thing here that is genuinely painful in imperative DOM code.
 
 ---
 
+### 3.7 The local inference path is synchronous
+`INFERENCE_BACKEND=local` posts to the resident worker and gets the PNG back on
+the same request, so it returns the image directly like the OpenCV path and
+**never creates a job row**. The polling machinery (`/jobs/<id>`, the phase
+labels, cold-start prediction) is therefore only exercised with
+`INFERENCE_BACKEND=modal`. Worth remembering when smoketesting: the local
+backend cannot validate the async path.
+
+Related: that call blocks its request for up to 180s if the worker hangs — the
+same shape of problem the Modal path was refactored to avoid, but dev-only.
+
+### 3.8 Local inference needs weights that are not on this machine
+`flux_1_kontext.py` loads `~/models/flux1-kontext-dev-Q8_0.gguf`, which does not
+exist here (`~/models` is absent). The GPU side is fine — the box has an **Intel
+Arc Pro B70** and the venv has the matching `torch 2.12.0+xpu`, and the worker
+targets `xpu`, not CUDA. Only the ~12GB quantised checkpoint is missing.
+
+---
+
 ## 4. Pre-existing, unrelated to PR #8
 
 ### 4.1 `tour.js` fails the lint workflow
@@ -205,7 +224,12 @@ Related: `simplify_for_coloring` and `run_local_diffusion_workflow` are
 commented out, and `rembg` is deliberately not imported because it is absent
 from both requirements files.
 
-### 4.5 Untracked files in `backend/`
+### 4.5 `main.js` is dead code
+`frontend/js/main.js` is referenced by **no** HTML page. It still carried a
+hardcoded API URL, so it was updated alongside the others for consistency, but
+it is not loaded anywhere and is a deletion candidate.
+
+### 4.6 Untracked files in `backend/`
 `flux_2_klein.py` and `test_client.py` are untracked and were deliberately left
 out of the PR #8 commit. They show up as "2 uncommitted changes" warnings on
 every `gh pr` command.

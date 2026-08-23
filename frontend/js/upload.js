@@ -4,7 +4,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const navUsername = document.querySelector("#nav-username");
   if (navUsername && username) navUsername.textContent = username;
 
-  const API_BASE_URL = "https://api.memoryillumination.com";
+  // Injected by scripts/gen_frontend_config.py from the root .env. Falls back
+  // to production so a deploy that never runs the generator still works.
+  const API_BASE_URL = window.MI_CONFIG?.apiBaseUrl || "https://api.memoryillumination.com";
 
   // Tour trigger disabled for now — still sandboxing the tooltip UI.
   // if (sessionStorage.getItem("newUser") === "1") {
