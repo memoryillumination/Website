@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Upload — Memory Illumination</title>
+    <script src="js/config.js" defer></script>
     <script src="js/transitions.js" defer></script>
     <script src="js/tour.js" defer></script>
     <script src="js/upload.js" defer></script>
@@ -38,33 +39,48 @@
     </header>
 
     <main class="mx-auto px-4 pt-14 pb-8 flex flex-col justify-center text-center max-w-[500px] min-h-screen">
-      <form id="upload-form" class="flex flex-col gap-5 p-8 rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.07)] bg-white">
-        <h3 class="text-lg font-semibold m-0">Upload Your File</h3>
-        <div class="flex w-full text-center gap-2">
-          <input
-            type="file"
-            id="file-input"
-            accept="image/*"
-            class="w-full rounded-lg border border-[#ccc] px-[1.2em] py-[0.6em] text-[1em] bg-white box-border"
-          />
-        </div>
-        <div id="style-options" class="flex w-full text-center gap-2">
-          <label class="inline-block w-1/2 box-border">
-            <input type="checkbox" id="check-option-1" class="w-auto m-0" />
-            <span> Sketch</span>
-          </label>
-          <label class="inline-block w-1/2 box-border">
-            <input type="checkbox" id="check-option-2" class="w-auto m-0" />
-            <span> Coloring Page</span>
-          </label>
-        </div>
-        <button
-          type="submit"
-          class="w-full rounded-lg border border-[#007bff] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#007bff] text-white cursor-pointer hover:bg-[#0056b3] hover:border-[#0056b3] active:bg-[#004a99] active:border-[#004a99] box-border"
-        >
-          Upload
-        </button>
-      </form>
+      <!-- Wrapper exists so the view switch can toggle `hidden` on a plain
+           block element. Putting `hidden` on the form itself would fight its
+           own `flex` display utility, and which one wins depends on Tailwind's
+           internal rule order. -->
+      <div id="form-view">
+        <form id="upload-form" class="flex flex-col gap-5 p-8 rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.07)] bg-white">
+          <h3 class="text-lg font-semibold m-0">Upload Your File</h3>
+          <div class="flex w-full text-center gap-2">
+            <input
+              type="file"
+              id="file-input"
+              accept="image/*"
+              class="w-full rounded-lg border border-[#ccc] px-[1.2em] py-[0.6em] text-[1em] bg-white box-border"
+            />
+          </div>
+          <div id="style-options" class="flex w-full text-center gap-2">
+            <label class="inline-block w-1/2 box-border">
+              <input type="checkbox" id="check-option-1" class="w-auto m-0" />
+              <span> Sketch</span>
+            </label>
+            <label class="inline-block w-1/2 box-border">
+              <input type="checkbox" id="check-option-2" class="w-auto m-0" />
+              <span> Coloring Page</span>
+            </label>
+          </div>
+          <button
+            type="submit"
+            class="w-full rounded-lg border border-[#007bff] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#007bff] text-white cursor-pointer hover:bg-[#0056b3] hover:border-[#0056b3] active:bg-[#004a99] active:border-[#004a99] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-[#007bff] disabled:hover:border-[#007bff] box-border"
+          >
+            Upload
+          </button>
+        </form>
+      </div>
+      <!-- Width is driven by upload.js; the CSS transition smooths the steps
+           between the real anchors (upload bytes, poll ticks, completion). -->
+      <div id="progress" class="hidden mt-5 h-2 w-full rounded-full bg-[#e5e5e5] overflow-hidden">
+        <div
+          id="progress-bar"
+          class="h-full w-0 rounded-full bg-[#007bff] transition-[width] duration-500 ease-out"
+        ></div>
+      </div>
+
       <p id="status-message" class="mt-4 font-bold min-h-6"></p>
 
       <!-- Populated by upload.js once the backend returns the PNG. The preview
@@ -77,13 +93,22 @@
           alt="Preview of your generated image"
           class="w-full mt-5 rounded-lg border border-[#e5e5e5] bg-[#f6f6f6]"
         />
-        <a
-          id="download-link"
-          download="illuminated.png"
-          class="block w-full mt-5 rounded-lg border border-[#007bff] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#007bff] text-white no-underline text-center cursor-pointer hover:bg-[#0056b3] hover:border-[#0056b3] active:bg-[#004a99] active:border-[#004a99] box-border"
-        >
-          Download
-        </a>
+        <div class="flex gap-3 mt-5">
+          <a
+            id="download-link"
+            download="illuminated.png"
+            class="flex-1 rounded-lg border border-[#007bff] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-[#007bff] text-white no-underline text-center cursor-pointer hover:bg-[#0056b3] hover:border-[#0056b3] active:bg-[#004a99] active:border-[#004a99] box-border"
+          >
+            Download
+          </a>
+          <button
+            id="try-again"
+            type="button"
+            class="flex-1 rounded-lg border border-[#6c757d] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-transparent text-[#6c757d] cursor-pointer hover:bg-[#6c757d] hover:text-white box-border"
+          >
+            Try Again
+          </button>
+        </div>
       </section>
     </main>
   </body>
