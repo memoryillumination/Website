@@ -192,6 +192,14 @@ targets `xpu`, not CUDA. Only the ~12GB quantised checkpoint is missing.
 
 ## 4. Pre-existing, unrelated to PR #8
 
+### 4.0 The deployed backend layout is flat
+`backend/uwsgi` sets `chdir = /srv/memory-illumination` with `module = app`, so
+`app.py` is the deploy **root** -- the repo's `backend/` directory does not
+exist there. Any code that derives a path by walking *up* from `app.py` is
+correct in the repo and wrong in production. This already caused one regression
+(`.env` resolving to `/srv`, no `SECRET_KEY`, all four workers dead at import),
+now fixed by trying both layouts. Worth checking against any future path logic.
+
 ### 4.1 `tour.js` fails the lint workflow
 **`frontend/js/tour.js`** does not satisfy Prettier, so `npm run lint` — and
 therefore CI — is likely red on `main` already, independent of any recent
@@ -282,6 +290,18 @@ both are display utilities, and which wins depends on Tailwind's internal rule
 order rather than class-attribute order. The upload form is wrapped in a plain
 `#form-view` block specifically so the view switch never relies on that
 ordering. Keep that wrapper.
+
+---
+
+### 5.7 Wrangler deploys from disk, not from git
+`wrangler.jsonc` sets `assets.directory: "frontend"`, and wrangler uploads what
+is on disk. A `.gitignore` entry therefore does **not** keep a generated file
+out of a deploy -- `frontend/js/config.js` holding a development API URL would
+have shipped to production. `frontend/.assetsignore` (gitignore syntax, must sit
+at the root of the assets directory) is what actually excludes it.
+
+Consequence by design: production has no `config.js`, so the page scripts fall
+back to the production API and the deferred script tag 404s once per page load.
 
 ---
 

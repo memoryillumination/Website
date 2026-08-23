@@ -20,10 +20,26 @@ import requests
 
 pillow_heif.register_heif_opener()
 
-# .env lives at the project root, one level up, so a single file serves the
-# backend and the frontend config generator (scripts/gen_frontend_config.py).
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
+# .env discovery has to satisfy two different layouts:
+#
+#   repo    <root>/.env with app.py in <root>/backend/, so one file serves the
+#           backend and the frontend config generator.
+#   deployed backend/ is flattened -- backend/uwsgi sets chdir=/srv/memory-
+#           illumination with module=app, so app.py IS the root and .env sits
+#           beside it. Assuming the repo layout here resolved the root to /srv
+#           and silently loaded nothing.
+#
+# Nearest first, matching normal dotenv precedence.
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_CANDIDATES = (
+    os.path.join(BACKEND_DIR, '.env'),
+    os.path.join(os.path.dirname(BACKEND_DIR), '.env'),
+)
+ENV_PATH = next((p for p in ENV_CANDIDATES if os.path.exists(p)), None)
+if ENV_PATH:
+    load_dotenv(ENV_PATH)
+else:
+    load_dotenv()  # fall back to python-dotenv's own upward search
 
 # Was loaded once at startup so per-request calls to simplify_for_coloring()
 # didn't pay session/model init cost on every upload.
@@ -40,10 +56,29 @@ load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
 # INFERENCE_BACKEND -- where diffusion runs, which is a genuinely separate
 #   question: you can point a local frontend at the Modal GPU, or run the local
 #   worker behind a production frontend.
-DEPLOY_ENV = os.environ.get('DEPLOY_ENV', 'production')
+def _require_choice(name, default, choices):
+    """
+    Read a setting and fail loudly on anything unrecognised.
+
+    An unvalidated DEPLOY_ENV fails *open*: 'prod' or 'Production' is simply
+    not equal to 'production', so the app would quietly drop into development
+    mode on a live host -- session cookies losing Secure and their domain, and
+    CORS accepting localhost and RFC1918 origins with credentials. Refusing to
+    start is the safer failure.
+    """
+    value = os.environ.get(name, default).strip().lower()
+    if value not in choices:
+        raise RuntimeError(
+            f"{name} must be one of {sorted(choices)}, got {value!r}. "
+            f"Checked .env at: {ENV_PATH or 'not found'}"
+        )
+    return value
+
+
+DEPLOY_ENV = _require_choice('DEPLOY_ENV', 'production', {'development', 'production'})
 IS_PRODUCTION = DEPLOY_ENV == 'production'
 
-INFERENCE_BACKEND = os.environ.get('INFERENCE_BACKEND', 'modal')
+INFERENCE_BACKEND = _require_choice('INFERENCE_BACKEND', 'modal', {'local', 'modal'})
 USE_MODAL = INFERENCE_BACKEND == 'modal'
 
 # The local worker is flux_1_kontext.py, a separate Flask process holding the
@@ -152,6 +187,14 @@ CONFIRM_RESEND_LIMIT = 3          # max confirmation emails per address per wind
 # arrive". This only rejects input that can't be an address at all, so we
 # don't hand obvious garbage to Resend and rack up bounces.
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$')
+
+if not app.config['SECRET_KEY']:
+    # Without this URLSafeTimedSerializer(None) raises an opaque TypeError at
+    # import and every uWSGI worker dies with no indication why.
+    raise RuntimeError(
+        "SECRET_KEY is not set. Checked .env at: "
+        + (ENV_PATH or f"none found; looked in {', '.join(ENV_CANDIDATES)}")
+    )
 
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 ph = PasswordHasher()

@@ -36,14 +36,24 @@ def read_env(path):
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            values[key.strip()] = value.strip().strip('"').strip("'")
+            value = value.strip()
+            # Strip a trailing inline comment, but only outside quotes, so a
+            # value like "a # b" survives. python-dotenv does the same; without
+            # this the two disagree about the very same file.
+            if value[:1] in ("'", '"'):
+                quote = value[0]
+                end = value.find(quote, 1)
+                value = value[1:end] if end > 0 else value[1:]
+            elif "#" in value:
+                value = value.split("#", 1)[0].strip()
+            values[key.strip()] = value
     return values
 
 
 def main():
     env = read_env(ENV_PATH)
     # Real environment variables win, so CI can generate this without a .env.
-    deploy_env = os.environ.get("DEPLOY_ENV", env.get("DEPLOY_ENV", "production"))
+    deploy_env = os.environ.get("DEPLOY_ENV", env.get("DEPLOY_ENV", "production")).strip().lower()
     if deploy_env not in DEFAULTS:
         print(f"error: DEPLOY_ENV must be one of {sorted(DEFAULTS)}, got {deploy_env!r}")
         return 1
