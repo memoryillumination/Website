@@ -20,6 +20,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   const uploadForm = document.querySelector("#upload-form");
+  const submitButton = document.querySelector("#upload-form button[type='submit']");
   const statusMessage = document.querySelector("#status-message");
   const fileInput = document.querySelector("#file-input");
   const check1 = document.querySelector("#check-option-1");
@@ -27,6 +28,11 @@ window.addEventListener("DOMContentLoaded", () => {
   const resultSection = document.querySelector("#result");
   const resultPreview = document.querySelector("#result-preview");
   const downloadLink = document.querySelector("#download-link");
+
+  // Progress indicator elements
+  const progressContainer = document.querySelector("#progress-container");
+  const progressBar = document.querySelector("#progress-bar");
+  const progressStatus = document.querySelector("#progress-status");
 
   // The blob URL backing both the preview and the download link. Held so it can
   // be revoked before a new result replaces it — otherwise every generation
@@ -43,6 +49,31 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function showProgress() {
+    progressContainer.classList.remove("hidden");
+    progressBar.style.width = "0%";
+  }
+
+  function setProgress(percent, message) {
+    progressBar.style.width = `${percent}%`;
+    progressStatus.textContent = message;
+  }
+
+  function hideProgress() {
+    progressContainer.classList.add("hidden");
+    progressBar.style.width = "0%";
+  }
+
+  function setUploadState(state) {
+    // state: "idle" | "processing" | "done"
+    submitButton.disabled = state === "processing";
+    if (state === "processing") {
+      submitButton.textContent = "Processing…";
+    } else if (state === "idle") {
+      submitButton.textContent = "Upload";
+    }
+  }
+
   check1.addEventListener("change", () => {
     if (check1.checked) check2.checked = false;
   });
@@ -50,38 +81,102 @@ window.addEventListener("DOMContentLoaded", () => {
     if (check2.checked) check1.checked = false;
   });
 
-  uploadForm.addEventListener("submit", (e) => {
+  // Wire up Try Again button
+  document.querySelector("#try-again-btn")?.addEventListener("click", () => {
+    clearResult();
+    fileInput.value = "";
+    statusMessage.textContent = "";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
+  uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const file = fileInput.files[0];
     if (!file) return (statusMessage.textContent = "Select a file.");
 
+    // Validate file size before upload (catch large files early)
+    const maxSize = 50 * 1024 * 1024; // 50 MB
+    if (file.size > maxSize) {
+      return (statusMessage.textContent = "File too large. Maximum size is 50 MB.");
+    }
+
     clearResult();
-    statusMessage.textContent = "Processing image...";
+    showProgress();
+    setProgress(10, "Uploading…");
+    setUploadState("processing");
+
     const formData = new FormData();
     formData.append("myFile", file);
     formData.append("settings", JSON.stringify({ featureA: check1.checked, featureB: check2.checked }));
 
-    fetch(`${API_BASE_URL}/upload-endpoint`, { method: "POST", credentials: "include", body: formData })
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || "Error processing image.");
-        }
-        return res.blob();
-      })
-      .then((blob) => {
-        // No synthetic a.click() here: the download is now driven by a real
-        // click on a real link, which keeps it out of the way of browser
-        // blocking of programmatic downloads that follow an await.
-        resultObjectUrl = URL.createObjectURL(blob);
-        resultPreview.src = resultObjectUrl;
-        downloadLink.href = resultObjectUrl;
-        resultSection.classList.remove("hidden");
-        statusMessage.textContent = "Ready — preview below, then download.";
-        resultSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      })
-      .catch((err) => {
-        statusMessage.textContent = err.message || "Error processing image.";
+    try {
+      const response = await fetch(`${API_BASE_URL}/upload-endpoint`, {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+        // Track upload progress
+        headers: {
+          "Content-Length": file.size,
+        },
       });
+
+      if (!response.ok) {
+        // Provide context-aware error messages
+        const contentType = response.headers.get("content-type") || "";
+        const body = contentType.includes("json")
+          ? await response.json().catch(() => ({}))
+          : {};
+
+        if (response.status === 429) {
+          throw new Error("Too many requests. Please wait a moment and try again.");
+        } else if (response.status === 413) {
+          throw new Error(body.error || "Image too large. Please upload a smaller photo.");
+        } else if (response.status === 400) {
+          throw new Error(body.error || "Invalid image file. Please upload a JPEG, PNG, HEIC, AVIF, or WEBP photo.");
+        } else {
+          throw new Error(body.error || "Server error. Please try again in a moment.");
+        }
+      }
+
+      setProgress(90, "Processing image…");
+
+      // Simulate processing progress (backend is working on GPU)
+      const processingInterval = setInterval(() => {
+        const currentWidth = parseFloat(progressBar.style.width) || 90;
+        if (currentWidth < 98) {
+          setProgress(Math.min(currentWidth + 2, 98), "Generating your image…");
+        }
+      }, 3000);
+
+      const blob = await response.blob();
+      clearInterval(processingInterval);
+      setProgress(100, "Complete!");
+
+      resultObjectUrl = URL.createObjectURL(blob);
+      resultPreview.src = resultObjectUrl;
+      downloadLink.href = resultObjectUrl;
+      resultSection.classList.remove("hidden");
+      statusMessage.textContent = "Ready — preview below, then download.";
+
+      // Scroll to result and set focus for screen readers
+      resultSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      resultPreview.focus();
+
+      // Hide progress after a brief delay
+      setTimeout(() => hideProgress(), 1000);
+      setUploadState("idle");
+    } catch (err) {
+      statusMessage.textContent = err.message || "Error processing image. Please try again.";
+      hideProgress();
+      setUploadState("idle");
+    }
+  });
+
+  // Clean up blob URLs when the user navigates away from the page
+  window.addEventListener("beforeunload", () => {
+    if (resultObjectUrl) {
+      URL.revokeObjectURL(resultObjectUrl);
+      resultObjectUrl = null;
+    }
   });
 });

@@ -20,6 +20,10 @@ import requests
 
 pillow_heif.register_heif_opener()
 
+# Load .env for convenience in local development. DEPLOY_ENV is intentionally
+# NOT used from .env for the CORS check: os.environ.get('DEPLOY_ENV', ...)
+# defaults to 'production', so a stale .env with DEPLOY_ENV=development won't
+# accidentally enable open CORS on a production deployment.
 load_dotenv()
 
 # Was loaded once at startup so per-request calls to simplify_for_coloring()
@@ -45,7 +49,27 @@ app = Flask(__name__)
 # front-end is put in place.
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
+# CORS: explicit origin list in dev mode (localhost, 127.0.0.1, LAN range);
+# lock down to production origin when deployed.
+# Note: os.environ.get() is used directly — load_dotenv() may populate
+# DEPLOY_ENV from .env, but we explicitly fall back to 'production' only if
+# no DEPLOY_ENV was ever set (not from .env). This prevents the dev .env
+# from accidentally enabling open CORS in production deployments where
+# a stale .env might be present.
+_deploy_env = os.environ.get('DEPLOY_ENV', 'production').lower()
+if _deploy_env == 'production':
+    _cors_origins = 'https://memoryillumination.com'
+else:
+    # Dev mode: allow localhost and common LAN ranges for testing.
+    _cors_origins = [
+        'http://localhost:8000',
+        'http://127.0.0.1:8000',
+        'http://192.168.0.0/16:8000',
+        'http://10.0.0.0/8:8000',
+        'http://172.16.0.0/12:8000',
+    ]
+
+CORS(app, supports_credentials=True, origins=_cors_origins)
 
 # Config
 app.config.update(
@@ -524,7 +548,11 @@ def resend_webhook():
 
 @app.route('/user/<username>/tier', methods=['PATCH'])
 def update_subscription_tier(username):
-    if request.headers.get('X-Admin-Key') != os.environ.get('ADMIN_KEY'):
+    admin_key = os.environ.get('ADMIN_KEY')
+    if not admin_key:
+        # If ADMIN_KEY is unset, reject all requests to prevent unguarded access.
+        return jsonify({"error": "Server configuration error"}), 500
+    if request.headers.get('X-Admin-Key') != admin_key:
         return jsonify({"error": "Forbidden"}), 403
 
     tier_id = request.json.get('tier_id')

@@ -68,6 +68,14 @@
       </form>
       <p id="status-message" class="mt-4 font-bold min-h-6"></p>
 
+      <!-- Progress bar: shown during upload/processing -->
+      <section id="progress-container" class="hidden mt-4 p-6 rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.07)] bg-white">
+        <p id="progress-status" class="font-medium text-[#0f0f0f] mb-3">Uploading...</p>
+        <div class="w-full bg-[#e5e5e5] rounded-full h-2.5 overflow-hidden">
+          <div id="progress-bar" class="bg-[#007bff] h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </section>
+
       <!-- Populated by upload.js once the backend returns the PNG. The preview
            and the download link share one object URL, so what's on screen is
            byte-for-byte what gets saved. -->
@@ -85,6 +93,12 @@
         >
           Download
         </a>
+        <button
+          id="try-again-btn"
+          class="block w-full mt-3 rounded-lg border border-[#6c757d] px-[1.2em] py-[0.6em] text-[1em] font-medium bg-transparent text-[#6c757d] cursor-pointer hover:bg-[#6c757d] hover:text-white"
+        >
+          Try Again
+        </button>
       </section>
     </main>
   </body>
