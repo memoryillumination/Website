@@ -57,6 +57,8 @@ window.addEventListener("DOMContentLoaded", () => {
   function setProgress(percent, message) {
     progressBar.style.width = `${percent}%`;
     progressStatus.textContent = message;
+    // Update ARIA attributes for screen readers.
+    progressContainer.setAttribute("aria-valuenow", String(percent));
   }
 
   function hideProgress() {
@@ -89,39 +91,55 @@ window.addEventListener("DOMContentLoaded", () => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
 
+  // Show/hide the Try Again button based on whether we have an error to recover from.
+  function updateTryAgainVisibility(show) {
+    const tryAgainBtn = document.querySelector("#try-again-btn");
+    if (tryAgainBtn) {
+      tryAgainBtn.classList.toggle("hidden", !show);
+    }
+  }
+
   uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const file = fileInput.files[0];
-    if (!file) return (statusMessage.textContent = "Select a file.");
+    if (!file) {
+      statusMessage.textContent = "Select a file.";
+      updateTryAgainVisibility(true);
+      return;
+    }
 
     // Validate file size before upload (catch large files early)
     const maxSize = 50 * 1024 * 1024; // 50 MB
     if (file.size > maxSize) {
-      return (statusMessage.textContent = "File too large. Maximum size is 50 MB.");
+      statusMessage.textContent = "File too large. Maximum size is 50 MB.";
+      updateTryAgainVisibility(true);
+      return;
     }
 
     clearResult();
     showProgress();
     setProgress(10, "Uploading…");
     setUploadState("processing");
+    updateTryAgainVisibility(false);
 
     const formData = new FormData();
     formData.append("myFile", file);
     formData.append("settings", JSON.stringify({ featureA: check1.checked, featureB: check2.checked }));
+
+    // Track the processing interval so it can be cleared in the finally path.
+    let processingIntervalId = null;
 
     try {
       const response = await fetch(`${API_BASE_URL}/upload-endpoint`, {
         method: "POST",
         credentials: "include",
         body: formData,
-        // Track upload progress
         headers: {
           "Content-Length": file.size,
         },
       });
 
       if (!response.ok) {
-        // Provide context-aware error messages
         const contentType = response.headers.get("content-type") || "";
         const body = contentType.includes("json")
           ? await response.json().catch(() => ({}))
@@ -140,8 +158,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
       setProgress(90, "Processing image…");
 
-      // Simulate processing progress (backend is working on GPU)
-      const processingInterval = setInterval(() => {
+      // Simulate processing progress (backend is working on GPU).
+      processingIntervalId = setInterval(() => {
         const currentWidth = parseFloat(progressBar.style.width) || 90;
         if (currentWidth < 98) {
           setProgress(Math.min(currentWidth + 2, 98), "Generating your image…");
@@ -149,7 +167,8 @@ window.addEventListener("DOMContentLoaded", () => {
       }, 3000);
 
       const blob = await response.blob();
-      clearInterval(processingInterval);
+      clearInterval(processingIntervalId);
+      processingIntervalId = null;
       setProgress(100, "Complete!");
 
       resultObjectUrl = URL.createObjectURL(blob);
@@ -157,18 +176,38 @@ window.addEventListener("DOMContentLoaded", () => {
       downloadLink.href = resultObjectUrl;
       resultSection.classList.remove("hidden");
       statusMessage.textContent = "Ready — preview below, then download.";
+      updateTryAgainVisibility(false);
 
-      // Scroll to result and set focus for screen readers
+      // Scroll to result and set focus on a semantic element for screen readers.
       resultSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      resultPreview.focus();
+      // Focus the result heading instead of the img element (which is not a
+      // standard focus target for screen readers).
+      const resultHeading = resultSection.querySelector("h3");
+      if (resultHeading) {
+        resultHeading.setAttribute("tabindex", "-1");
+        resultHeading.focus();
+      }
 
-      // Hide progress after a brief delay
-      setTimeout(() => hideProgress(), 1000);
+      // Hide progress after a brief delay.
+      setTimeout(() => hideProgress(), 1500);
       setUploadState("idle");
     } catch (err) {
+      // Always clear the interval in the error path.
+      if (processingIntervalId !== null) {
+        clearInterval(processingIntervalId);
+        processingIntervalId = null;
+      }
+
       statusMessage.textContent = err.message || "Error processing image. Please try again.";
       hideProgress();
       setUploadState("idle");
+      updateTryAgainVisibility(true);
+    } finally {
+      // Safety net: if the interval somehow survived to here, clear it.
+      if (processingIntervalId !== null) {
+        clearInterval(processingIntervalId);
+        processingIntervalId = null;
+      }
     }
   });
 

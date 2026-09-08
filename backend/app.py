@@ -60,13 +60,19 @@ _deploy_env = os.environ.get('DEPLOY_ENV', 'production').lower()
 if _deploy_env == 'production':
     _cors_origins = 'https://memoryillumination.com'
 else:
-    # Dev mode: allow localhost and common LAN ranges for testing.
+    # Dev mode: allow localhost, 127.0.0.1, and common LAN ranges for testing.
+    # Flask-CORS uses probably_regex() to decide whether an origin is a regex —
+    # it checks for hint chars: *, \, ], $, ^, (, ), [.
+    # LAN ranges must use explicit regex patterns, not CIDR notation (which
+    # Flask-CORS would treat as literal strings and never match).
     _cors_origins = [
         'http://localhost:8000',
         'http://127.0.0.1:8000',
-        'http://192.168.0.0/16:8000',
-        'http://10.0.0.0/8:8000',
-        'http://172.16.0.0/12:8000',
+        'http://192.168.*:8000',
+        'http://10.*:8000',
+        'http://172.1[6-9].*:8000',
+        'http://172.2*:8000',
+        'http://172.3[01]*:8000',
     ]
 
 CORS(app, supports_credentials=True, origins=_cors_origins)
