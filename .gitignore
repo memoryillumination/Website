@@ -150,3 +150,6 @@ vite.config.ts.timestamp-*
 .wrangler
 .dev.vars*
 !.dev.vars.example
+
+# Generated from .env by scripts/gen_frontend_config.py — environment-specific.
+frontend/js/config.js

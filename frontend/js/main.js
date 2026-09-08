@@ -61,7 +61,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const check2 = document.querySelector("#check-option-2");
   const toRegisterBtn = document.querySelector("#to-register-btn");
 
-  const API_BASE_URL = "https://api.memoryillumination.com";
+  // Injected by scripts/gen_frontend_config.py from the root .env. Falls back
+  // to production so a deploy that never runs the generator still works.
+  const API_BASE_URL = window.MI_CONFIG?.apiBaseUrl || "https://api.memoryillumination.com";
   let sessionToken = "";
 
   function showHome() {
