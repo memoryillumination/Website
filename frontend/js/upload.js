@@ -141,9 +141,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
       if (!response.ok) {
         const contentType = response.headers.get("content-type") || "";
-        const body = contentType.includes("json")
-          ? await response.json().catch(() => ({}))
-          : {};
+        const body = contentType.includes("json") ? await response.json().catch(() => ({})) : {};
 
         if (response.status === 429) {
           throw new Error("Too many requests. Please wait a moment and try again.");
