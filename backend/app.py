@@ -86,7 +86,7 @@ USE_MODAL = INFERENCE_BACKEND == 'modal'
 LOCAL_WORKER_URL = os.environ.get('LOCAL_WORKER_URL', 'http://127.0.0.1:5001/generate')
 
 # When True, output for free-tier (and unauthenticated) callers is watermarked.
-# Off by default because MI_Watermark.png is not checked into the repo — see the
+# Off by default because MI_LOGO_wordmark_transparent.png is not checked into the repo — see the
 # availability check next to WATERMARK_PATH below. If this is turned on while
 # the asset is missing, startup logs a warning and uploads continue
 # unwatermarked rather than failing.
@@ -793,7 +793,7 @@ def logout():
     )
     return response
 
-WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_Watermark.png")
+WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_LOGO_wordmark_transparent.png")
 
 # Resolved once at startup so a missing asset costs one warning instead of an
 # exception per upload. Watermarking is best-effort: if the file isn't there,
@@ -808,22 +808,43 @@ if WATERMARK_FREE_TIER and not WATERMARK_AVAILABLE:
 def apply_watermark(image_bytes):
     output = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     logo = Image.open(WATERMARK_PATH).convert("RGBA")
-    logo = logo.resize(output.size, Image.LANCZOS)
 
-    logo_alpha = logo.split()[3]
-    if logo_alpha.getextrema() == (255, 255):
-        alpha = ImageOps.invert(logo.convert("L"))
-    else:
-        alpha = logo_alpha
+    # Scale logo to 1/10 of image width
+    logo_w = max(output.width // 10, 50)
+    aspect = logo.height / max(logo.width, 1)
+    logo = logo.resize((logo_w, int(logo_w * aspect)), Image.LANCZOS)
 
-    alpha = alpha.point(lambda x: int(x * 0.12))
-    watermark = Image.new("RGBA", logo.size, (0, 0, 0, 0))
-    watermark.putalpha(alpha)
-    output.paste(watermark, (0, 0), watermark)
+    # Diagonal tiling parameters
+    gap = logo_w // 3
+    diag = logo_w  # per-row diagonal offset
+    cols = (output.width // (logo_w + gap)) + 4
+    rows = (output.height // (logo_w + gap)) + 4
+
+    # Build an oversized tile canvas
+    canvas_w = cols * (logo_w + gap) + diag + logo_w
+    canvas_h = rows * (logo_w + gap) + diag + logo_w
+    tile_layer = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+
+    for r in range(rows):
+        for c in range(cols):
+            x = c * (logo_w + gap) + r * diag
+            y = r * (logo_w + gap)
+            tile_layer.paste(logo, (x, y), logo)
+
+    # Apply 12% opacity via alpha channel
+    alpha = tile_layer.split()[3]
+    alpha = alpha.point(lambda a: int(a * 0.12))
+    tile_layer.putalpha(alpha)
+
+    # Center the tile layer over the output image
+    ox = (canvas_w - output.width) // 2
+    oy = (canvas_h - output.height) // 2
+    output.paste(tile_layer, (ox, oy), tile_layer)
 
     buf = io.BytesIO()
     output.save(buf, format="PNG")
     return buf.getvalue()
+
 
 
 class UnsupportedImageError(Exception):
