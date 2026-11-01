@@ -1,4 +1,4 @@
-import os, io, re, cv2, json, hmac, base64, hashlib, sqlite3
+import os, io, re, cv2, json, hmac, uuid, base64, hashlib, sqlite3, math
 import numpy as np
 from PIL import Image, ImageOps
 import pillow_heif
@@ -20,7 +20,10 @@ import requests
 
 pillow_heif.register_heif_opener()
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
+
+# Absolute path to this directory — used for watermark asset resolution
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Was loaded once at startup so per-request calls to simplify_for_coloring()
 # didn't pay session/model init cost on every upload.
@@ -31,11 +34,11 @@ load_dotenv()
 # worker. Set APP_ENV=production in .env to switch.
 APP_ENV = os.environ.get('APP_ENV', 'development')
 
-# When True, output for free-tier (and unauthenticated) callers is watermarked.
-# Off by default because MI_Watermark.png is not checked into the repo — see the
-# availability check next to WATERMARK_PATH below. If this is turned on while
-# the asset is missing, startup logs a warning and uploads continue
-# unwatermarked rather than failing.
+# When True, output for free-tier (and unauthenticated) callers is watermarked
+# with the MI wordmark — see apply_watermark() for the tiling. Off by default;
+# flip deliberately, not by drift. If this is turned on while the asset is
+# missing, startup logs a warning and uploads continue unwatermarked rather
+# than failing.
 WATERMARK_FREE_TIER = False
 
 app = Flask(__name__)
@@ -45,7 +48,12 @@ app = Flask(__name__)
 # front-end is put in place.
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-CORS(app, supports_credentials=True, origins=["https://memoryillumination.com"])
+CORS(app, supports_credentials=True, origins=[
+    "https://memoryillumination.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://192.168.1.108:8000",
+])
 
 # Config
 app.config.update(
@@ -661,33 +669,115 @@ def logout():
     )
     return response
 
-WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_Watermark.png")
+# The MI wordmark is a backend asset (no frontend page references it). It must
+# satisfy two different layouts:
+#
+#   deployed backend/ is flattened -- backend/uwsgi sets chdir=/srv/memory-
+#           illumination with module=app, so app.py IS the root. The asset
+#           lives beside app.py in backend/ and is deployed with the rest of
+#           that directory, so the nearest candidate (beside app.py) always
+#           resolves.
+#   repo     app.py in <root>/backend/, asset in <root>/backend/ as well (the
+#           copy in <root>/frontend/ is the one the frontend *might* serve, but
+#           the backend reads from its own directory).
+#
+# Nearest first, matching the .env convention.
+WATERMARK_ASSET_NAME = "MI_LOGO_wordmark_transparent.png"
+WATERMARK_PATH_CANDIDATES = (
+    os.path.join(BACKEND_DIR, WATERMARK_ASSET_NAME),                             # beside app.py (deployed + repo)
+    os.path.join(os.path.dirname(BACKEND_DIR), "frontend", WATERMARK_ASSET_NAME),  # repo layout fallback
+)
+WATERMARK_PATH = next((p for p in WATERMARK_PATH_CANDIDATES if os.path.exists(p)), None)
+
+# Tiling geometry. Stamp size and spacing both scale with the image's short
+# side, so a 1024 px diffusion output and a 5000 px phone photo both get a
+# comparable number of stamps. Spacing is centre-to-centre on a uniform
+# square lattice and must exceed the rotated stamp's diagonal, so stamps
+# never overlap and the gaps between them are uniform.
+WATERMARK_SPACING_SHORT_SIDE_RATIO = 0.12
+WATERMARK_ROTATION_DEGREES = 45
+WATERMARK_ALPHA_SCALE = 0.35               # fraction of the logo's own alpha
+WATERMARK_STAMP_COLOR = (255, 255, 255)
 
 # Resolved once at startup so a missing asset costs one warning instead of an
 # exception per upload. Watermarking is best-effort: if the file isn't there,
 # free-tier output simply goes out unwatermarked.
-WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and os.path.exists(WATERMARK_PATH)
+WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and WATERMARK_PATH is not None and os.path.exists(WATERMARK_PATH)
 if WATERMARK_FREE_TIER and not WATERMARK_AVAILABLE:
     print(
-        f"⚠️  WATERMARK_FREE_TIER is enabled but {WATERMARK_PATH} is missing — "
-        "free-tier output will NOT be watermarked."
+        f"⚠️  WATERMARK_FREE_TIER is enabled but the MI wordmark asset was not "
+        f"found (looked for: {WATERMARK_PATH_CANDIDATES}) — free-tier output "
+        "will NOT be watermarked. In the deployed (flattened) layout the asset "
+        "must be copied beside app.py."
     )
 
+
 def apply_watermark(image_bytes):
+    """Tile the MI wordmark across the image: each stamp rotated 45°, on a
+    uniform square lattice (equal centre-to-centre spacing in both axes), at
+    ~35% of the logo's own alpha.
+
+    The lattice is generated directly in the *output* image's coordinate
+    frame — no oversampled sheet and no second rotation — so a stamp's
+    orientation is exactly WATERMARK_ROTATION_DEGREES and its alpha is never
+    re-multiplied. Stamps are composited with alpha_composite() (NOT
+    Image.paste with the stamp as its own mask: paste() multiplies the layer
+    alpha by the mask alpha, squaring it and wiping out a faint watermark).
+    """
     output = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    w, h = output.size
+
     logo = Image.open(WATERMARK_PATH).convert("RGBA")
-    logo = logo.resize(output.size, Image.LANCZOS)
 
-    logo_alpha = logo.split()[3]
-    if logo_alpha.getextrema() == (255, 255):
+    # Stamp size from the short side; clamp so tiny and huge images both get
+    # sane grids.
+    stamp_w = max(64, min(512, int(min(w, h) * 0.16)))
+    scale = stamp_w / logo.width
+    stamp_h = max(1, int(round(logo.height * scale)))
+    logo = logo.resize((stamp_w, stamp_h), Image.LANCZOS)
+
+    # Fade the stamp. The wordmark asset carries its own alpha channel (0/255
+    # where transparent), so scale that directly; the L-based invert fallback
+    # from the old MI_Watermark.png path is kept only as a guard for a
+    # solid-filled replacement asset.
+    alpha = logo.split()[3]
+    if alpha.getextrema() == (255, 255):
         alpha = ImageOps.invert(logo.convert("L"))
-    else:
-        alpha = logo_alpha
+    alpha = alpha.point(lambda x: int(x * WATERMARK_ALPHA_SCALE))
+    stamp = Image.new("RGBA", logo.size, WATERMARK_STAMP_COLOR + (0,))
+    stamp.putalpha(alpha)
 
-    alpha = alpha.point(lambda x: int(x * 0.12))
-    watermark = Image.new("RGBA", logo.size, (0, 0, 0, 0))
-    watermark.putalpha(alpha)
-    output.paste(watermark, (0, 0), watermark)
+    # Rotated stamp: expand() grows the canvas to fit the rotated glyph.
+    # This is the ONLY rotation — the tiling below happens in the output's
+    # own frame, so the stamp lands at exactly this angle.
+    angle = WATERMARK_ROTATION_DEGREES
+    rotated = stamp.rotate(angle, resample=Image.BICUBIC, expand=True)
+    rw, rh = rotated.size
+
+    # Centre-to-centre spacing on the uniform lattice. Must exceed the
+    # rotated stamp's diagonal or stamps overlap; the max() guard keeps that
+    # true even for a very wide/short logo.
+    diagonal = (rw ** 2 + rh ** 2) ** 0.5
+    spacing = max(int(round(min(w, h) * WATERMARK_SPACING_SHORT_SIDE_RATIO)),
+                  int(round(diagonal * 1.15)))
+
+    # Tile a transparent output-sized layer. The lattice runs from well
+    # before one edge to well past the other so the rotated stamps cover
+    # every corner; partially-off-screen stamps are fine — alpha_composite
+    # clips them at the layer bounds.
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    x0 = int(math.floor((-rw / 2.0) / spacing))
+    x1 = int(math.ceil((w + rw / 2.0) / spacing))
+    y0 = int(math.floor((-rh / 2.0) / spacing))
+    y1 = int(math.ceil((h + rh / 2.0) / spacing))
+    for gy in range(y0, y1 + 1):
+        for gx in range(x0, x1 + 1):
+            px = int(round(gx * spacing - rw / 2.0))
+            py = int(round(gy * spacing - rh / 2.0))
+            if -rw <= px <= w - rw and -rh <= py <= h - rh:
+                layer.alpha_composite(rotated, (px, py))
+
+    output = Image.alpha_composite(output, layer)
 
     buf = io.BytesIO()
     output.save(buf, format="PNG")
