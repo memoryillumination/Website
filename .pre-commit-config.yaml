@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: smoke-test
+        name: smoke-test
+        entry: python tests/smoke_test.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true

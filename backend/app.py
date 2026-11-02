@@ -198,7 +198,14 @@ if not app.config['SECRET_KEY']:
 
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 ph = PasswordHasher()
-DB_NAME = os.path.join(os.path.dirname(__file__), "users.db")
+
+# Support a separate database for smoke testing so test runs never corrupt
+# or collide with the production / dev users.db.
+_SMOKE_TEST_DB = os.environ.get("SMOKE_TEST_DB", "").strip()
+DB_NAME = os.path.join(os.path.dirname(__file__), _SMOKE_TEST_DB if _SMOKE_TEST_DB else "users.db")
+
+# When set, requests authenticated as this user bypass all rate limits.
+SMOKE_TEST_USER = os.environ.get("SMOKE_TEST_USER", "").strip()
 
 
 def get_db_connection():
@@ -380,6 +387,24 @@ def too_many_requests(retry_after):
     response = jsonify({"error": "Too many requests. Please try again later."})
     response.headers['Retry-After'] = str(retry_after)
     return response, 429
+
+
+def _is_smoke_test_request():
+    """Check if the current request is authenticated as the smoke-test user.
+
+    Used to bypass rate limits for automated smoke tests that need to upload
+    repeatedly without hitting the per-IP caps.
+    """
+    if not SMOKE_TEST_USER:
+        return False
+    token = request.cookies.get('session', '')
+    if not token:
+        return False
+    try:
+        username = serializer.loads(token, salt='session', max_age=604800)
+        return username == SMOKE_TEST_USER
+    except Exception:
+        return False
 
 
 # --- EMAIL CONFIRMATION ---
@@ -734,8 +759,10 @@ def login():
 
     # Probe without recording: only failures below consume quota, so a user
     # signing in normally is never locked out of their own account.
+    # Bypass for the smoke-test user so automated tests never hit login rate limits.
+    _login_bypass = SMOKE_TEST_USER and username == SMOKE_TEST_USER
     retry_after = rate_limit_retry_after(conn, 'login', client_ip(), record=False)
-    if retry_after:
+    if retry_after and not _login_bypass:
         conn.close()
         return too_many_requests(retry_after)
 
@@ -1155,13 +1182,12 @@ def upload_file():
     settings = json.loads(request.form.get('settings', '{}'))
     token    = request.cookies.get('session', '')
 
-    # Checked before reading the upload body: this endpoint needs no session, so
-    # the per-IP limit is the only thing standing between an anonymous caller
-    # and unbounded Modal GPU spend.
+    # Per-IP rate limits. Bypass for the smoke-test user so automated tests
+    # can upload repeatedly without hitting the per-IP caps.
     ip = client_ip()
     conn = get_db_connection()
     retry_after = rate_limit_retry_after(conn, 'upload', ip)
-    if not retry_after and settings.get('featureB'):
+    if not retry_after and settings.get('featureB') and not _is_smoke_test_request():
         retry_after = rate_limit_retry_after(conn, 'upload_gpu', ip)
     conn.commit()
     conn.close()
