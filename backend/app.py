@@ -334,22 +334,13 @@ init_db()
 # --- RATE LIMITING ---
 # Functions moved to utils/rate_limit.py
 
-def _is_smoke_test_request():
-    """Check if the current request is authenticated as the smoke-test user.
-
-    Used to bypass rate limits for automated smoke tests that need to upload
-    repeatedly without hitting the per-IP caps.
-    """
-    if not SMOKE_TEST_USER:
-        return False
-    token = request.cookies.get('session', '')
-    if not token:
-        return False
-    try:
-        username = serializer.loads(token, salt='session', max_age=604800)
-        return username == SMOKE_TEST_USER
-    except Exception:
-        return False
+# Helper functions defined in helpers.py
+import helpers
+helpers.set_globals(serializer, SMOKE_TEST_USER, JOB_RETENTION_SECONDS)
+_is_smoke_test_request = helpers._is_smoke_test_request
+job_owner = helpers.job_owner
+load_job = helpers.load_job
+sweep_old_jobs = helpers.sweep_old_jobs
 
 
 # --- EMAIL CONFIRMATION ---
@@ -718,17 +709,6 @@ def estimate_seconds(cold_start):
     return COLD_ESTIMATE_SECONDS if cold_start else WARM_ESTIMATE_SECONDS
 
 
-def job_owner(token, ip):
-    """
-    Identity a job is bound to, so one caller cannot poll another's job.
-    Falls back to IP for the anonymous uploads this endpoint still allows.
-    """
-    try:
-        return f"user:{serializer.loads(token, salt='session', max_age=604800)}"
-    except Exception:
-        return f"ip:{ip}"
-
-
 def spawn_remote_diffusion(image_bytes):
     """Dispatch to the Modal GPU worker without waiting; returns the call id."""
     import modal
@@ -796,21 +776,6 @@ def fetch_job_result(call_id):
         # and strand the job row as pending.
         print(f"❌ Modal job {call_id} returned an unexpected payload: {e!r}")
         return 'error', "Something went wrong processing that image. Please try again."
-
-
-def load_job(conn, job_id, owner):
-    """The job row, but only for the caller that created it."""
-    return conn.execute(
-        "SELECT * FROM jobs WHERE id = ? AND owner = ?", (job_id, owner)
-    ).fetchone()
-
-
-def sweep_old_jobs(conn):
-    if random.random() < 0.05:
-        conn.execute(
-            "DELETE FROM jobs WHERE created_at < ?",
-            (int(time.time()) - JOB_RETENTION_SECONDS,)
-        )
 
 
 # Upload endpoint defined in upload.py
