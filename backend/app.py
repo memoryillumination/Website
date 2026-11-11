@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 import random
 import time
 import requests
+from utils import rate_limit, email, http
 
 pillow_heif.register_heif_opener()
 
@@ -331,63 +332,7 @@ init_db()
 
 
 # --- RATE LIMITING ---
-
-def client_ip():
-    """
-    Caller's address.
-
-    Nginx reaches uWSGI over the uwsgi protocol (uwsgi_pass), and its
-    uwsgi_params sets REMOTE_ADDR to $remote_addr — the real client address,
-    since api.memoryillumination.com is a DNS-only record pointing straight at
-    the droplet with nothing proxying in front of it.
-
-    Deliberately does NOT consult X-Forwarded-For. Nginx never sets that header
-    here, so it would carry only whatever the client chose to send: anyone could
-    rotate it per request and walk straight through every rate limit. If a proxy
-    (e.g. Cloudflare) is ever put in front of this API, trust its specific
-    header instead of re-adding a blanket ProxyFix.
-    """
-    return request.remote_addr or 'unknown'
-
-
-def rate_limit_retry_after(conn, name, identifier, record=True):
-    """
-    Seconds the caller must wait before retrying `name`, or 0 to proceed.
-
-    Set record=False to test a bucket without consuming quota — used by
-    /login so only failed attempts count against the limit.
-    """
-    limit, window = RATE_LIMITS[name]
-    bucket = f"{name}:{identifier}"
-    now = int(time.time())
-
-    # Prune this bucket only. A global sweep here would use one endpoint's
-    # window to delete rows another endpoint still needs.
-    conn.execute("DELETE FROM rate_limits WHERE bucket = ? AND hit_at < ?", (bucket, now - window))
-
-    hits = [r[0] for r in conn.execute(
-        "SELECT hit_at FROM rate_limits WHERE bucket = ? ORDER BY hit_at", (bucket,)
-    )]
-    if len(hits) >= limit:
-        # Quota frees up when the oldest hit falls out of the window.
-        return max(1, hits[0] + window - now)
-
-    if record:
-        conn.execute("INSERT INTO rate_limits (bucket, hit_at) VALUES (?, ?)", (bucket, now))
-
-    # Idle buckets are never revisited, so sweep them occasionally rather than
-    # letting the table grow without bound.
-    if random.random() < 0.01:
-        longest = max(w for _, w in RATE_LIMITS.values())
-        conn.execute("DELETE FROM rate_limits WHERE hit_at < ?", (now - longest,))
-    return 0
-
-
-def too_many_requests(retry_after):
-    response = jsonify({"error": "Too many requests. Please try again later."})
-    response.headers['Retry-After'] = str(retry_after)
-    return response, 429
-
+# Functions moved to utils/rate_limit.py
 
 def _is_smoke_test_request():
     """Check if the current request is authenticated as the smoke-test user.
@@ -409,25 +354,7 @@ def _is_smoke_test_request():
 
 # --- EMAIL CONFIRMATION ---
 
-def is_email_suppressed(conn, email):
-    """True if this address hard-bounced or filed a spam complaint."""
-    return conn.execute(
-        "SELECT 1 FROM email_suppressions WHERE email = ?", (email,)
-    ).fetchone() is not None
-
-
-def suppress_email(conn, email, reason, detail=None):
-    """Record an address as undeliverable. Idempotent — webhooks get retried."""
-    conn.execute(
-        """INSERT INTO email_suppressions (email, reason, detail, created_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(email) DO UPDATE SET
-               reason = excluded.reason,
-               detail = excluded.detail,
-               created_at = excluded.created_at""",
-        (email, reason, detail, int(time.time()))
-    )
-
+# Email suppression functions moved to utils/email.py
 
 def verify_webhook_signature(headers, payload):
     """
@@ -548,11 +475,11 @@ def register():
     try:
         conn = get_db_connection()
 
-        retry_after = rate_limit_retry_after(conn, 'register', client_ip())
+        retry_after = rate_limit.rate_limit_retry_after(conn, 'register', http.client_ip())
         if retry_after:
             conn.commit()
             conn.close()
-            return too_many_requests(retry_after)
+            return rate_limit.too_many_requests(retry_after)
 
         existing = conn.execute(
             "SELECT is_active FROM users WHERE username = ?", (username,)
@@ -571,7 +498,7 @@ def register():
             # the two cases apart and we don't email an existing user on demand.
             should_send = existing['is_active'] == 0
 
-        if should_send and not is_email_suppressed(conn, username) \
+        if should_send and not email.is_email_suppressed(conn, username) \
                 and confirmation_quota_remaining(conn, username):
             conn.execute(
                 "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
@@ -601,18 +528,18 @@ def resend_confirmation():
     try:
         conn = get_db_connection()
 
-        retry_after = rate_limit_retry_after(conn, 'resend', client_ip())
+        retry_after = rate_limit.rate_limit_retry_after(conn, 'resend', http.client_ip())
         if retry_after:
             conn.commit()
             conn.close()
-            return too_many_requests(retry_after)
+            return rate_limit.too_many_requests(retry_after)
 
         user = conn.execute(
             "SELECT is_active FROM users WHERE username = ?", (username,)
         ).fetchone()
 
         if user is not None and user['is_active'] == 0 \
-                and not is_email_suppressed(conn, username) \
+                and not email.is_email_suppressed(conn, username) \
                 and confirmation_quota_remaining(conn, username):
             conn.execute(
                 "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
@@ -667,7 +594,7 @@ def resend_webhook():
             address = address.strip().lower()
             if not address:
                 continue
-            suppress_email(conn, address, reason, detail)
+            email.suppress_email(conn, address, reason, detail)
             print(f"Suppressed {address}: {reason} ({detail})")
         conn.commit()
         conn.close()
@@ -761,10 +688,10 @@ def login():
     # signing in normally is never locked out of their own account.
     # Bypass for the smoke-test user so automated tests never hit login rate limits.
     _login_bypass = SMOKE_TEST_USER and username == SMOKE_TEST_USER
-    retry_after = rate_limit_retry_after(conn, 'login', client_ip(), record=False)
+    retry_after = rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip(), record=False)
     if retry_after and not _login_bypass:
         conn.close()
-        return too_many_requests(retry_after)
+        return rate_limit.too_many_requests(retry_after)
 
     user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
     if user and user['is_active'] == 1:
@@ -787,7 +714,7 @@ def login():
 
     # Reached only on failure: unknown user, unconfirmed account, or bad
     # password. Record the attempt so repeated guessing hits the limit.
-    rate_limit_retry_after(conn, 'login', client_ip())
+    rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip())
     conn.commit()
     conn.close()
     return jsonify({"error": "Unauthorized"}), 401
@@ -1184,15 +1111,15 @@ def upload_file():
 
     # Per-IP rate limits. Bypass for the smoke-test user so automated tests
     # can upload repeatedly without hitting the per-IP caps.
-    ip = client_ip()
+    ip = http.client_ip()
     conn = get_db_connection()
-    retry_after = rate_limit_retry_after(conn, 'upload', ip)
+    retry_after = rate_limit.rate_limit_retry_after(conn, 'upload', ip)
     if not retry_after and settings.get('featureB') and not _is_smoke_test_request():
-        retry_after = rate_limit_retry_after(conn, 'upload_gpu', ip)
+        retry_after = rate_limit.rate_limit_retry_after(conn, 'upload_gpu', ip)
     conn.commit()
     conn.close()
     if retry_after:
-        return too_many_requests(retry_after)
+        return rate_limit.too_many_requests(retry_after)
 
     input_data = file.read()
 
@@ -1330,7 +1257,7 @@ def job_phase(row, elapsed):
 
 @app.route('/jobs/<job_id>', methods=['GET'])
 def job_status(job_id):
-    ip = client_ip()
+    ip = http.client_ip()
     owner = job_owner(request.cookies.get('session', ''), ip)
 
     # try/finally rather than close-per-branch: an unexpected raise between here
@@ -1392,7 +1319,7 @@ def job_status(job_id):
 
 @app.route('/jobs/<job_id>/result', methods=['GET'])
 def job_result(job_id):
-    ip = client_ip()
+    ip = http.client_ip()
     owner = job_owner(request.cookies.get('session', ''), ip)
 
     conn = get_db_connection()
