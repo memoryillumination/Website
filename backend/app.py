@@ -840,102 +840,13 @@ def job_phase(row, elapsed):
     return 'generating'
 
 
-@app.route('/jobs/<job_id>', methods=['GET'])
-def job_status(job_id):
-    ip = http.client_ip()
-    owner = job_owner(request.cookies.get('session', ''), ip)
-
-    # try/finally rather than close-per-branch: an unexpected raise between here
-    # and the end used to leak the connection for the life of the worker.
-    conn = get_db_connection()
-    try:
-        row = load_job(conn, job_id, owner)
-        if row is None:
-            return jsonify({"error": "Job not found."}), 404
-
-        elapsed = int(time.time()) - row['created_at']
-        payload = {
-            "status": row['status'],
-            "elapsed": elapsed,
-            "cold_start": bool(row['cold_start']),
-            "estimate_seconds": estimate_seconds(row['cold_start']),
-        }
-
-        # Terminal states are recorded, so don't call Modal again for them.
-        if row['status'] != 'pending':
-            if row['status'] == 'error':
-                payload['error'] = row['error']
-            return jsonify(payload), 200
-
-        status, result = fetch_job_result(row['call_id'])
-
-        if status == 'transient':
-            # We could not reach Modal, which is not a verdict on the job — the
-            # GPU work may have succeeded. Recording it as terminal here would
-            # permanently kill a job over one blip, so report it as still
-            # pending and let the next poll ask again. Give up only once the
-            # worker could not possibly still be running.
-            if elapsed <= JOB_MAX_AGE_SECONDS:
-                status = 'pending'
-            else:
-                status = 'error'
-                result = "Lost contact with the image worker. Please try again."
-
-        if status == 'pending':
-            payload['phase'] = job_phase(row, elapsed)
-            return jsonify(payload), 200
-
-        # Record the terminal state so later polls (and a reload) are answered from
-        # SQLite. The bytes stay with Modal; /jobs/<id>/result re-fetches them.
-        error = result if status == 'error' else None
-        conn.execute(
-            "UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
-            (status, error, int(time.time()), job_id)
-        )
-        conn.commit()
-
-        payload['status'] = status
-        if status == 'error':
-            payload['error'] = error
-        return jsonify(payload), 200
-    finally:
-        conn.close()
-
-
-@app.route('/jobs/<job_id>/result', methods=['GET'])
-def job_result(job_id):
-    ip = http.client_ip()
-    owner = job_owner(request.cookies.get('session', ''), ip)
-
-    conn = get_db_connection()
-    row = load_job(conn, job_id, owner)
-    conn.close()
-    if row is None:
-        return jsonify({"error": "Job not found."}), 404
-
-    status, result = fetch_job_result(row['call_id'])
-    if status == 'pending':
-        return jsonify({"error": "That image isn't ready yet."}), 409
-    if status == 'transient':
-        # 503, not 500: the image is probably fine and retrying is the right move.
-        response = jsonify({"error": "Couldn't reach the image worker. Please try again in a moment."})
-        response.headers['Retry-After'] = '5'
-        return response, 503
-    if status == 'error':
-        return jsonify({"error": result}), 500
-
-    result_bytes = result
-    # Tier was captured when the job was submitted, so a mid-job upgrade or
-    # session expiry can't change the terms the image was generated under.
-    if WATERMARK_AVAILABLE and row['is_free_tier']:
-        # Best-effort, matching /upload-endpoint: a watermarking failure must
-        # not cost the user the image they already paid GPU time for.
-        try:
-            result_bytes = apply_watermark(result_bytes)
-        except Exception as e:
-            print(f"⚠️  Watermarking failed, returning unwatermarked image: {e}")
-
-    return send_file(io.BytesIO(result_bytes), mimetype='image/png')
+# Job management routes defined in jobs.py
+def _register_job_routes():
+    from jobs import register_routes
+    register_routes(app, get_db_connection, job_owner, load_job, sweep_old_jobs,
+                   fetch_job_result, estimate_seconds, job_phase, JOB_MAX_AGE_SECONDS,
+                   WATERMARK_AVAILABLE, apply_watermark)
+_register_job_routes()
 
 
 if __name__ == '__main__':
