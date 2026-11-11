@@ -57,40 +57,46 @@ else:
 # INFERENCE_BACKEND -- where diffusion runs, which is a genuinely separate
 #   question: you can point a local frontend at the Modal GPU, or run the local
 #   worker behind a production frontend.
-def _require_choice(name, default, choices):
-    """
-    Read a setting and fail loudly on anything unrecognised.
+# Import configuration
+from config import config
 
-    An unvalidated DEPLOY_ENV fails *open*: 'prod' or 'Production' is simply
-    not equal to 'production', so the app would quietly drop into development
-    mode on a live host -- session cookies losing Secure and their domain, and
-    CORS accepting localhost and RFC1918 origins with credentials. Refusing to
-    start is the safer failure.
-    """
-    value = os.environ.get(name, default).strip().lower()
-    if value not in choices:
-        raise RuntimeError(
-            f"{name} must be one of {sorted(choices)}, got {value!r}. "
-            f"Checked .env at: {ENV_PATH or 'not found'}"
-        )
-    return value
-
-
-DEPLOY_ENV = _require_choice('DEPLOY_ENV', 'production', {'development', 'production'})
+DEPLOY_ENV = config.DEPLOY_ENV
 IS_PRODUCTION = DEPLOY_ENV == 'production'
+LOCAL_WORKER_URL = config.LOCAL_WORKER_URL
+SITE_BASE_URL = config.SITE_BASE_URL
+API_BASE_URL = config.API_BASE_URL
+FRONTEND_PORT = config.FRONTEND_PORT
+SECRET_KEY = config.SECRET_KEY
+EMAIL_API_KEY = config.EMAIL_API_KEY
+MAIL_FROM = config.MAIL_FROM
+MAIL_REPLY_TO = config.MAIL_REPLY_TO
+RESEND_WEBHOOK_SECRET = config.RESEND_WEBHOOK_SECRET
+_SMOKETEST_DB = config.SMOKE_TEST_DB
+SMOKE_TEST_USER = config.SMOKE_TEST_USER
 
-INFERENCE_BACKEND = _require_choice('INFERENCE_BACKEND', 'modal', {'local', 'modal'})
-USE_MODAL = INFERENCE_BACKEND == 'modal'
+# Rate limits
+RATE_LIMITS = {
+    'upload':     config.RATE_LIMITS.get('upload', {'limit': 20, 'window': 900}),
+    'upload_gpu': config.RATE_LIMITS.get('upload_gpu', {'limit': 5, 'window': 900}),
+    'register':   config.RATE_LIMITS.get('register', {'limit': 3, 'window': 900}),
+    'login':      config.RATE_LIMITS.get('login', {'limit': 20, 'window': 900}),
+    'resend':     config.RATE_LIMITS.get('resend', {'limit': 2, 'window': 1800}),
+    'confirm':    config.RATE_LIMITS.get('confirm', {'limit': 5, 'window': 300}),
+    'tier':       config.RATE_LIMITS.get('tier', {'limit': 3, 'window': 600}),
+}
 
-# The local worker is flux_1_kontext.py, a separate Flask process holding the
-# quantised model resident on the Intel XPU. Started independently of this app.
-LOCAL_WORKER_URL = os.environ.get('LOCAL_WORKER_URL', 'http://127.0.0.1:5001/generate')
+# Timeouts and retention
+CONFIRM_TOKEN_MAX_AGE = config.CONFIRM_TOKEN_MAX_AGE
+JOB_RETENTION_SECONDS = config.JOB_RETENTION_SECONDS
+COLD_ESTIMATE_SECONDS = config.COLD_ESTIMATE_SECONDS
+WARM_ESTIMATE_SECONDS = config.WARM_ESTIMATE_SECONDS
+JOB_MAX_AGE_SECONDS = config.JOB_MAX_AGE_SECONDS
 
-# When True, output for free-tier (and unauthenticated) callers is watermarked.
-# Off by default because MI_LOGO_wordmark_transparent.png is not checked into the repo — see the
-# availability check next to WATERMARK_PATH below. If this is turned on while
-# the asset is missing, startup logs a warning and uploads continue
-# unwatermarked rather than failing.
+# Upload limits
+MAX_UPLOAD_BYTES = config.MAX_UPLOAD_BYTES
+MAX_UPLOAD_PX = config.MAX_UPLOAD_PX
+
+# Watermarking
 WATERMARK_FREE_TIER = False
 
 app = Flask(__name__)
@@ -103,17 +109,14 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 # Origins are derived from DEPLOY_ENV but can be overridden explicitly. The
 # localhost entries are added only outside production: allowing them there
 # would let a page on any visitor's own machine call this API with credentials.
-SITE_BASE_URL = os.environ.get(
-    'SITE_BASE_URL',
-    'https://memoryillumination.com' if IS_PRODUCTION else 'http://localhost:8000',
-)
-API_BASE_URL = os.environ.get(
-    'API_BASE_URL',
-    'https://api.memoryillumination.com' if IS_PRODUCTION else 'http://localhost:5000',
-)
+SITE_BASE_URL = config.SITE_BASE_URL
+API_BASE_URL = config.API_BASE_URL
+FRONTEND_PORT = config.FRONTEND_PORT
 
-# Port the frontend dev server listens on, used to build the permitted origin.
-FRONTEND_PORT = os.environ.get('FRONTEND_PORT', '8000')
+if IS_PRODUCTION:
+    CORS(app, resources={r"/*": {"origins": [SITE_BASE_URL]}})
+else:
+    CORS(app)
 
 if IS_PRODUCTION:
     CORS_ORIGINS = [SITE_BASE_URL]
@@ -151,20 +154,20 @@ COOKIE_SECURE = IS_PRODUCTION
 
 # Config
 app.config.update(
-    SECRET_KEY=os.environ.get('SECRET_KEY'),
+    SECRET_KEY=config.SECRET_KEY,
 )
 
 # Transactional email goes through Resend, sending from the verified
 # mail.memoryillumination.com subdomain. REPLY_TO is a real inbox (Cloudflare
 # Email Routing) so replies to a noreply@ sender don't vanish.
-resend.api_key = os.environ.get('EMAIL_API_KEY')
-MAIL_FROM = os.environ.get('MAIL_FROM', 'Memory Illumination <noreply@mail.memoryillumination.com>')
-MAIL_REPLY_TO = os.environ.get('MAIL_REPLY_TO', 'support@memoryillumination.com')
+resend.api_key = config.EMAIL_API_KEY
+MAIL_FROM = config.MAIL_FROM
+MAIL_REPLY_TO = config.MAIL_REPLY_TO
 
 # Signing secret for the Resend webhook (Svix format, "whsec_..."). Without it
 # the webhook endpoint rejects everything — an unauthenticated suppression
 # endpoint would let anyone block delivery to any address.
-RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET')
+RESEND_WEBHOOK_SECRET = config.RESEND_WEBHOOK_SECRET
 WEBHOOK_TOLERANCE = 300           # max age of a webhook timestamp, in seconds
 
 # Per-IP rate limits as {name: (max_requests, window_seconds)}. Enforced in
@@ -197,16 +200,16 @@ if not app.config['SECRET_KEY']:
         + (ENV_PATH or f"none found; looked in {', '.join(ENV_CANDIDATES)}")
     )
 
-serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+serializer = URLSafeTimedSerializer(config.SECRET_KEY)
 ph = PasswordHasher()
 
 # Support a separate database for smoke testing so test runs never corrupt
 # or collide with the production / dev users.db.
-_SMOKE_TEST_DB = os.environ.get("SMOKE_TEST_DB", "").strip()
+_SMOKE_TEST_DB = config.SMOKE_TEST_DB
 DB_NAME = os.path.join(os.path.dirname(__file__), _SMOKE_TEST_DB if _SMOKE_TEST_DB else "users.db")
 
 # When set, requests authenticated as this user bypass all rate limits.
-SMOKE_TEST_USER = os.environ.get("SMOKE_TEST_USER", "").strip()
+SMOKE_TEST_USER = config.SMOKE_TEST_USER
 
 
 def get_db_connection():

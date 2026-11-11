@@ -1,0 +1,18 @@
+{
+    "confirm_token_max_age": 3600,
+    "job_retention_seconds": 86400,
+    "cold_estimate_seconds": 60,
+    "warm_estimate_seconds": 30,
+    "job_max_age_seconds": 3600,
+    "rate_limits": {
+        "upload": {"limit": 20, "window": 900},
+        "upload_gpu": {"limit": 5, "window": 900},
+        "register": {"limit": 3, "window": 900},
+        "login": {"limit": 20, "window": 900},
+        "resend": {"limit": 2, "window": 1800},
+        "confirm": {"limit": 5, "window": 300},
+        "tier": {"limit": 3, "window": 600}
+    },
+    "max_upload_bytes": 10485760,
+    "max_upload_px": 16777216
+}
