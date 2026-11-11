@@ -52,6 +52,9 @@ class Config:
     MAX_UPLOAD_BYTES: int = 10485760
     MAX_UPLOAD_PX: int = 16777216
 
+    # Watermarking (from .config.json)
+    WATERMARK_FREE_TIER: bool = False
+
     def validate(self):
         """Validate required configuration values."""
         errors = []
@@ -93,6 +96,7 @@ class Config:
             self.RATE_LIMITS = config.get('rate_limits', self.RATE_LIMITS)
             self.MAX_UPLOAD_BYTES = config.get('max_upload_bytes', self.MAX_UPLOAD_BYTES)
             self.MAX_UPLOAD_PX = config.get('max_upload_px', self.MAX_UPLOAD_PX)
+            self.WATERMARK_FREE_TIER = config.get('watermark_free_tier', self.WATERMARK_FREE_TIER)
 
         return self
 

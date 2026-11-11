@@ -97,7 +97,7 @@ MAX_UPLOAD_BYTES = config.MAX_UPLOAD_BYTES
 MAX_UPLOAD_PX = config.MAX_UPLOAD_PX
 
 # Watermarking
-WATERMARK_FREE_TIER = False
+WATERMARK_FREE_TIER = config.WATERMARK_FREE_TIER
 
 app = Flask(__name__)
 
