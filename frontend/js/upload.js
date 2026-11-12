@@ -34,6 +34,8 @@ window.addEventListener("DOMContentLoaded", () => {
   const resultSection = document.querySelector("#result");
   const resultPreview = document.querySelector("#result-preview");
   const downloadLink = document.querySelector("#download-link");
+  // TODO: Add Print button — see #14
+  // const printBtn = document.querySelector("#print-btn");
 
   // --- PROGRESS MODEL -------------------------------------------------------
   //
@@ -220,6 +222,38 @@ window.addEventListener("DOMContentLoaded", () => {
   downloadLink.addEventListener("click", () => {
     setTimeout(() => resetToIdle(5000), 150);
   });
+
+  // TODO: Add Print button — opens print dialog for instant printing without download. See #14
+  // printBtn.addEventListener("click", () => {
+  //   if (!resultObjectUrl) return;
+  //   const printWindow = window.open("", "_blank", "width=800,height=900");
+  //   if (!printWindow) return;
+  //   const img = new Image();
+  //   img.onload = () => {
+  //     printWindow.document.write(`
+  //       <!doctype html>
+  //       <html>
+  //         <head><title>Print Image</title>
+  //         <style>
+  //           * { margin: 0; padding: 0; }
+  //           body { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  //           img { max-width: 100%; max-height: 100vh; }
+  //           @media print { body { display: block; } img { max-height: 100vh; } }
+  //         </style></head>
+  //         <body><img src="${resultObjectUrl}" alt="Print" /></body>
+  //       </html>
+  //     `);
+  //     printWindow.document.close();
+  //     printWindow.onload = () => {
+  //       printWindow.print();
+  //     };
+  //   };
+  //   img.onerror = () => {
+  //     printWindow.close();
+  //     alert("Failed to load image for printing.");
+  //   };
+  //   img.src = resultObjectUrl;
+  // });
 
   tryAgainButton.addEventListener("click", () => resetToIdle());
 
