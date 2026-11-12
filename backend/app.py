@@ -74,6 +74,9 @@ RESEND_WEBHOOK_SECRET = config.RESEND_WEBHOOK_SECRET
 _SMOKETEST_DB = config.SMOKE_TEST_DB
 SMOKE_TEST_USER = config.SMOKE_TEST_USER
 
+INFERENCE_BACKEND = 'modal'
+USE_MODAL = INFERENCE_BACKEND == 'modal'
+
 # Rate limits
 RATE_LIMITS = {
     'upload':     config.RATE_LIMITS.get('upload', {'limit': 20, 'window': 900}),
@@ -98,6 +101,17 @@ MAX_UPLOAD_PX = config.MAX_UPLOAD_PX
 
 # Watermarking
 WATERMARK_FREE_TIER = config.WATERMARK_FREE_TIER
+
+# Resolved once at startup so a missing asset costs one warning instead of an
+# exception per upload. Watermarking is best-effort: if the file isn't there,
+# free-tier output simply goes out unwatermarked.
+WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_Watermark.png")
+WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and os.path.exists(WATERMARK_PATH)
+if WATERMARK_FREE_TIER and not WATERMARK_AVAILABLE:
+    print(
+        f"⚠️  WATERMARK_FREE_TIER is enabled but {WATERMARK_PATH} is missing — "
+        "free-tier output will NOT be watermarked."
+    )
 
 app = Flask(__name__)
 
