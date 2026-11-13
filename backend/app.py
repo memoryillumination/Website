@@ -101,6 +101,9 @@ MAX_UPLOAD_PX = config.MAX_UPLOAD_PX
 
 # Watermarking
 WATERMARK_FREE_TIER = config.WATERMARK_FREE_TIER
+WATERMARK_OPACITY = config.WATERMARK_OPACITY
+WATERMARK_SCALE = config.WATERMARK_SCALE
+WATERMARK_SPACING = config.WATERMARK_SPACING
 
 # Resolved once at startup so a missing asset costs one warning instead of an
 # exception per upload. Watermarking is best-effort: if the file isn't there,
@@ -363,13 +366,13 @@ def apply_watermark(image_bytes):
     output = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     logo = Image.open(WATERMARK_PATH).convert("RGBA")
 
-    # Scale logo to 1/10 of image width
-    logo_w = max(output.width // 10, 50)
+    # Scale logo based on configured scale factor
+    logo_w = max(int(output.width * WATERMARK_SCALE), 50)
     aspect = logo.height / max(logo.width, 1)
     logo = logo.resize((logo_w, int(logo_w * aspect)), Image.LANCZOS)
 
-    # Diagonal tiling parameters
-    gap = logo_w // 3
+    # Diagonal tiling parameters based on configured spacing
+    gap = int(logo_w * WATERMARK_SPACING)
     diag = logo_w  # per-row diagonal offset
     cols = (output.width // (logo_w + gap)) + 4
     rows = (output.height // (logo_w + gap)) + 4
@@ -385,9 +388,9 @@ def apply_watermark(image_bytes):
             y = r * (logo_w + gap)
             tile_layer.paste(logo, (x, y), logo)
 
-    # Apply 12% opacity via alpha channel
+    # Apply configured opacity via alpha channel
     alpha = tile_layer.split()[3]
-    alpha = alpha.point(lambda a: int(a * 0.12))
+    alpha = alpha.point(lambda a: int(a * WATERMARK_OPACITY))
     tile_layer.putalpha(alpha)
 
     # Center the tile layer over the output image

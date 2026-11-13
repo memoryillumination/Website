@@ -46,7 +46,11 @@ class Config:
     JOB_MAX_AGE_SECONDS: int = 3600
 
     # Rate limits (from .config.json)
-    RATE_LIMITS: dict = {}
+    RATE_LIMITS: dict = None
+
+    def __post_init__(self):
+        if self.RATE_LIMITS is None:
+            self.RATE_LIMITS = {}
 
     # Upload limits (from .config.json)
     MAX_UPLOAD_BYTES: int = 10485760
@@ -54,6 +58,9 @@ class Config:
 
     # Watermarking (from .config.json)
     WATERMARK_FREE_TIER: bool = False
+    WATERMARK_OPACITY: float = 0.12
+    WATERMARK_SCALE: float = 0.1
+    WATERMARK_SPACING: float = 0.33
 
     def validate(self):
         """Validate required configuration values."""
@@ -97,6 +104,9 @@ class Config:
             self.MAX_UPLOAD_BYTES = config.get('max_upload_bytes', self.MAX_UPLOAD_BYTES)
             self.MAX_UPLOAD_PX = config.get('max_upload_px', self.MAX_UPLOAD_PX)
             self.WATERMARK_FREE_TIER = config.get('watermark_free_tier', self.WATERMARK_FREE_TIER)
+            self.WATERMARK_OPACITY = config.get('watermark_opacity', self.WATERMARK_OPACITY)
+            self.WATERMARK_SCALE = config.get('watermark_scale', self.WATERMARK_SCALE)
+            self.WATERMARK_SPACING = config.get('watermark_spacing', self.WATERMARK_SPACING)
 
         return self
 
