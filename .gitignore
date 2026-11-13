@@ -2,6 +2,10 @@
 *CACHEDIR.TAG
 
 
+# Backend
+backend/pipelines
+
+
 # Logs
 logs
 *.log
