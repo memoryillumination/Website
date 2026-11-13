@@ -94,6 +94,7 @@ JOB_RETENTION_SECONDS = config.JOB_RETENTION_SECONDS
 COLD_ESTIMATE_SECONDS = config.COLD_ESTIMATE_SECONDS
 WARM_ESTIMATE_SECONDS = config.WARM_ESTIMATE_SECONDS
 JOB_MAX_AGE_SECONDS = config.JOB_MAX_AGE_SECONDS
+CONTAINER_IDLE_TIMEOUT = config.CONTAINER_IDLE_TIMEOUT
 
 # Upload limits
 MAX_UPLOAD_BYTES = config.MAX_UPLOAD_BYTES
@@ -192,37 +193,7 @@ WEBHOOK_TOLERANCE = 300           # max age of a webhook timestamp, in seconds
 # 'login' counts only failed attempts, so a legitimate user is never locked out.
 # 'upload_gpu' is deliberately the tightest: featureB dispatches to Modal, and
 # that is the only path here that costs money per request.
-RATE_LIMITS = {
-    'register':   (5, 3600),
-    'resend':     (10, 3600),
-    'login':      (20, 900),
-    'upload':     (30, 3600),
-    'upload_gpu': (10, 3600),
-}
-
-CONFIRM_TOKEN_MAX_AGE = 3600      # 1 hour, matches the copy in the email body
-CONFIRM_RESEND_WINDOW = 3600      # throttle window for confirmation sends
-CONFIRM_RESEND_LIMIT = 3          # max confirmation emails per address per window
-
-# Deliberately permissive: real validation is "did the confirmation email
-# arrive". This only rejects input that can't be an address at all, so we
-# don't hand obvious garbage to Resend and rack up bounces.
-EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$')
-
-if not app.config['SECRET_KEY']:
-    # Without this URLSafeTimedSerializer(None) raises an opaque TypeError at
-    # import and every uWSGI worker dies with no indication why.
-    raise RuntimeError(
-        "SECRET_KEY is not set. Checked .env at: "
-        + (ENV_PATH or f"none found; looked in {', '.join(ENV_CANDIDATES)}")
-    )
-
-serializer = URLSafeTimedSerializer(config.SECRET_KEY)
-ph = PasswordHasher()
-
-# Support a separate database for smoke testing so test runs never corrupt
-# or collide with the production / dev users.db.
-SMOKE_TEST_USER = config.SMOKE_TEST_USER
+# (Loaded from config.RATE_LIMITS at top of file)
 
 import db
 get_db_connection = db.get_db_connection
@@ -569,21 +540,7 @@ def run_diffusion_workflow(image_bytes, inference_params=None):
 # poll-confirmed elapsed time, actual completion) and eases between those
 # anchors. Tune from the "⏱️  upload-endpoint timing" and "⏱️  modal worker
 # timing" lines in the logs.
-WARM_ESTIMATE_SECONDS = 20   # container already up: inference + transfer only
-COLD_ESTIMATE_SECONDS = 80   # adds @modal.enter() loading FLUX bf16 onto the A100
-
-# flux_1_kontext_modal.py sets scaledown_window=300, so a container idle longer
-# than that is gone and the next call pays a cold start. Held slightly under the
-# real window: predicting cold and finishing early reads better than the reverse.
-CONTAINER_IDLE_TIMEOUT = 270
-
-# Job rows are metadata only. Keep a day for debugging, then sweep.
-JOB_RETENTION_SECONDS = 86400
-
-# Ceiling on retrying a job we cannot reach Modal about. flux_1_kontext_modal.py
-# sets the function timeout to 600s, so past this the worker cannot still be
-# running and the job is genuinely lost rather than merely unreachable.
-JOB_MAX_AGE_SECONDS = 660
+# (Loaded from config at top of file)
 
 
 def predict_cold_start(conn):

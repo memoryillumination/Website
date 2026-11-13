@@ -44,6 +44,7 @@ class Config:
     COLD_ESTIMATE_SECONDS: int = 60
     WARM_ESTIMATE_SECONDS: int = 30
     JOB_MAX_AGE_SECONDS: int = 3600
+    CONTAINER_IDLE_TIMEOUT: int = 270
 
     # Rate limits (from .config.json)
     RATE_LIMITS: dict = None
@@ -100,6 +101,7 @@ class Config:
             self.COLD_ESTIMATE_SECONDS = config.get('cold_estimate_seconds', self.COLD_ESTIMATE_SECONDS)
             self.WARM_ESTIMATE_SECONDS = config.get('warm_estimate_seconds', self.WARM_ESTIMATE_SECONDS)
             self.JOB_MAX_AGE_SECONDS = config.get('job_max_age_seconds', self.JOB_MAX_AGE_SECONDS)
+            self.CONTAINER_IDLE_TIMEOUT = config.get('container_idle_timeout', self.CONTAINER_IDLE_TIMEOUT)
             self.RATE_LIMITS = config.get('rate_limits', self.RATE_LIMITS)
             self.MAX_UPLOAD_BYTES = config.get('max_upload_bytes', self.MAX_UPLOAD_BYTES)
             self.MAX_UPLOAD_PX = config.get('max_upload_px', self.MAX_UPLOAD_PX)
