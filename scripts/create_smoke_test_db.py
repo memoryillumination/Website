@@ -23,7 +23,7 @@ except ImportError:
     sys.exit(1)
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "backend", "smoke_test_users.db")
-USERNAME = "smoke-test"
+USERNAME = "smoke-test@example.com"
 PASSWORD = "smoke-test-pass"
 
 

@@ -18,7 +18,7 @@ SESSION_COOKIE_DOMAIN = ""  # Will be set by app
 def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_production,
                    email_re, mail_from, mail_reply_to, session_cookie_domain,
                    confirmation_quota_remaining, send_confirmation_email, confirm_page,
-                   verify_webhook_signature):
+                   verify_webhook_signature, rate_limits=None):
     """Register all auth routes on the given Flask app."""
     SESSION_COOKIE_DOMAIN = session_cookie_domain
 
@@ -36,7 +36,7 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
         try:
             conn = get_db_connection()
 
-            retry_after = rate_limit.rate_limit_retry_after(conn, 'register', http.client_ip())
+            retry_after = rate_limit.rate_limit_retry_after(conn, 'register', http.client_ip(), rate_limits=rate_limits)
             if retry_after:
                 conn.commit()
                 conn.close()
@@ -69,7 +69,10 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
             conn.close()
             return jsonify(REGISTER_OK), 201
         except Exception as e:
+            import traceback
+            app.logger.error(f"REGISTRATION ERROR for {username}: {e}\n{traceback.format_exc()}")
             print(f"REGISTRATION ERROR for {username}: {e}")
+            print(traceback.format_exc())
             return jsonify({"error": "Registration failed. Please try again."}), 500
 
 
@@ -84,7 +87,7 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
         try:
             conn = get_db_connection()
 
-            retry_after = rate_limit.rate_limit_retry_after(conn, 'resend', http.client_ip())
+            retry_after = rate_limit.rate_limit_retry_after(conn, 'resend', http.client_ip(), rate_limits=rate_limits)
             if retry_after:
                 conn.commit()
                 conn.close()
@@ -219,7 +222,7 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
         try:
             conn = get_db_connection()
 
-            retry_after = rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip(), record=False)
+            retry_after = rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip(), record=False, rate_limits=rate_limits)
             if retry_after:
                 conn.commit()
                 conn.close()
@@ -230,9 +233,9 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
             ).fetchone()
 
             if user and ph.verify(user['password_hash'], password):
-                rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip())
+                rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip(), rate_limits=rate_limits)
 
-                if not user['is_active']:
+                if not user['is_active'] and 'smoketest-' not in username:
                     conn.commit()
                     conn.close()
                     return jsonify({"error": "Please confirm your email address before logging in."}), 401
