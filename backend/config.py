@@ -62,6 +62,9 @@ class Config:
     WATERMARK_OPACITY: float = 0.12
     WATERMARK_SCALE: float = 0.1
     WATERMARK_SPACING: float = 0.33
+    WATERMARK_SPACING_SHORT_SIDE_RATIO: float = 0.12
+    WATERMARK_ROTATION_DEGREES: float = 45.0
+    WATERMARK_ALPHA_SCALE: float = 0.35
 
     def validate(self):
         """Validate required configuration values."""
@@ -109,6 +112,9 @@ class Config:
             self.WATERMARK_OPACITY = config.get('watermark_opacity', self.WATERMARK_OPACITY)
             self.WATERMARK_SCALE = config.get('watermark_scale', self.WATERMARK_SCALE)
             self.WATERMARK_SPACING = config.get('watermark_spacing', self.WATERMARK_SPACING)
+            self.WATERMARK_SPACING_SHORT_SIDE_RATIO = config.get('watermark_spacing_short_side_ratio', self.WATERMARK_SPACING_SHORT_SIDE_RATIO)
+            self.WATERMARK_ROTATION_DEGREES = config.get('watermark_rotation_degrees', self.WATERMARK_ROTATION_DEGREES)
+            self.WATERMARK_ALPHA_SCALE = config.get('watermark_alpha_scale', self.WATERMARK_ALPHA_SCALE)
 
         return self
 
