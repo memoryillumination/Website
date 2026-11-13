@@ -4,6 +4,7 @@
 
 # Backend
 backend/pipelines
+backend/dev-utils
 
 
 # Logs
