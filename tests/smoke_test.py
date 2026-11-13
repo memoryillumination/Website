@@ -36,6 +36,35 @@ def register(session, email, password):
     print(f"✅ Registered {email}")
     return True
 
+def check_confirmation_email_sent(session, email):
+    """Check if the confirmation email was sent by querying the database."""
+    try:
+        import sqlite3
+        import time
+        
+        # Wait a moment for the database to be updated
+        time.sleep(1)
+        
+        # Check the SMOKE_TEST_DB environment variable for the database path
+        import os
+        db_path = os.environ.get("SMOKE_TEST_DB", "backend/smoke_test.db")
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM confirmation_sends WHERE email = ?", (email,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        if count > 0:
+            print(f"✅ Confirmation email sent to {email}")
+            return True
+        else:
+            print(f"❌ Confirmation email not sent to {email}")
+            return False
+    except Exception as e:
+        print(f"❌ Error checking confirmation email: {e}")
+        return False
+
 def logout(session):
     """Log out the current user."""
     resp = session.post(f"{BASE_URL}/logout", timeout=10)
@@ -149,6 +178,10 @@ def main():
     test_email = f"smoketest-{random_string(8)}@example.com"
     test_password = "test-password-123"
     if not register(session, test_email, test_password):
+        sys.exit(1)
+    
+    # Check if the confirmation email was sent
+    if not check_confirmation_email_sent(session, test_email):
         sys.exit(1)
     print()
 
