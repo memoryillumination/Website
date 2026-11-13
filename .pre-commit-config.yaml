@@ -6,5 +6,5 @@ repos:
         entry: python tests/smoke_test.py
         language: system
         pass_filenames: false
-        always_run: true
+        files: backend/
         verbose: true

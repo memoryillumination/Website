@@ -11,11 +11,39 @@ Usage:
 import os, sys, json, hashlib, io, time
 import requests
 from PIL import Image
+import string
+import random
 
 BASE_URL = os.environ.get("SMOKE_TEST_API_URL", "http://127.0.0.1:5000")
 USERNAME = os.environ.get("SMOKE_TEST_USER", "smoke-test@example.com")
 PASSWORD = os.environ.get("SMOKE_TEST_PASSWORD", "smoke-test-pass")
 TEST_IMAGE = os.path.join(os.path.dirname(__file__), "test_image.png")
+
+def random_string(length=10):
+    """Generate a random alphanumeric string."""
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
+def register(session, email, password):
+    """Register a new user."""
+    resp = session.post(
+        f"{BASE_URL}/register",
+        json={"username": email, "password": password},
+        timeout=10,
+    )
+    if resp.status_code != 201:
+        print(f"❌ Registration failed: {resp.status_code} {resp.text}")
+        return False
+    print(f"✅ Registered {email}")
+    return True
+
+def logout(session):
+    """Log out the current user."""
+    resp = session.post(f"{BASE_URL}/logout", timeout=10)
+    if resp.status_code != 200:
+        print(f"❌ Logout failed: {resp.status_code} {resp.text}")
+        return False
+    print("✅ Logged out")
+    return True
 
 
 def login(session, username, password):
@@ -116,14 +144,22 @@ def main():
 
     session = requests.Session()
 
-    # Step 1: Login
-    print("Step 1: Login")
-    if not login(session, USERNAME, PASSWORD):
+    # Step 1: Register a new user
+    print("Step 1: Register")
+    test_email = f"smoketest-{random_string(8)}@example.com"
+    test_password = "test-password-123"
+    if not register(session, test_email, test_password):
         sys.exit(1)
     print()
 
-    # Step 2: Upload (CPU path) - Free tier (expects watermark)
-    print("Step 2: Upload test image (CPU path) - Free tier")
+    # Step 2: Login
+    print("Step 2: Login")
+    if not login(session, test_email, test_password):
+        sys.exit(1)
+    print()
+
+    # Step 3: Upload (CPU path) - Free tier (expects watermark)
+    print("Step 3: Upload test image (CPU path) - Free tier")
     result = upload_image(session, use_gpu=False)
     if result is None:
         sys.exit(1)
@@ -145,8 +181,8 @@ def main():
         print("✅ Watermark detected (free tier)")
     print()
     
-    # Step 3: Upload (GPU path) - Free tier (expects watermark)
-    print("Step 3: Upload test image (GPU path) - Free tier")
+    # Step 4: Upload (GPU path) - Free tier (expects watermark)
+    print("Step 4: Upload test image (GPU path) - Free tier")
     result = upload_image(session, use_gpu=True)
     if result is None:
         sys.exit(1)
@@ -162,6 +198,13 @@ def main():
             print("❌ Watermark not detected (GPU path) - images are identical")
             sys.exit(1)
         print("✅ Watermark detected (GPU path, free tier)")
+    print()
+
+    # Step 5: Logout
+    print("Step 5: Logout")
+    if not logout(session):
+        sys.exit(1)
+    print()
 
     print("🎉 All smoke tests passed")
     sys.exit(0)
