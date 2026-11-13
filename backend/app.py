@@ -337,7 +337,7 @@ def _register_auth_routes():
     register_routes(app, get_db_connection, ph, serializer, DEPLOY_ENV, IS_PRODUCTION,
                    EMAIL_RE, MAIL_FROM, MAIL_REPLY_TO, COOKIE_DOMAIN,
                    confirmation_quota_remaining, send_confirmation_email, _confirm_page,
-                   verify_webhook_signature)
+                   verify_webhook_signature, RATE_LIMITS)
 _register_auth_routes()
 
 
@@ -653,7 +653,7 @@ def _register_upload_routes():
                    predict_cold_start, spawn_remote_diffusion, job_owner,
                    sweep_old_jobs, estimate_seconds, run_diffusion_workflow,
                    apply_watermark, WATERMARK_AVAILABLE, USE_MODAL,
-                   COLD_ESTIMATE_SECONDS, WARM_ESTIMATE_SECONDS)
+                   COLD_ESTIMATE_SECONDS, WARM_ESTIMATE_SECONDS, RATE_LIMITS)
 _register_upload_routes()
 
 

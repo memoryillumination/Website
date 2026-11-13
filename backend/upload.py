@@ -16,7 +16,7 @@ def register_routes(app, get_db_connection, serializer, deploy_env, is_productio
                    predict_cold_start, spawn_remote_diffusion, job_owner,
                    sweep_old_jobs, estimate_seconds, run_diffusion_workflow,
                    apply_watermark, watermark_available, use_modal,
-                   cold_estimate_seconds, warm_estimate_seconds):
+                   cold_estimate_seconds, warm_estimate_seconds, rate_limits=None):
     """Register the upload endpoint."""
 
     @app.route('/upload-endpoint', methods=['POST'])
@@ -31,9 +31,9 @@ def register_routes(app, get_db_connection, serializer, deploy_env, is_productio
         # can upload repeatedly without hitting the per-IP caps.
         ip = http.client_ip()
         conn = get_db_connection()
-        retry_after = rate_limit.rate_limit_retry_after(conn, 'upload', ip)
+        retry_after = rate_limit.rate_limit_retry_after(conn, 'upload', ip, rate_limits=rate_limits)
         if not retry_after and settings.get('featureB') and not is_smoke_test_request():
-            retry_after = rate_limit.rate_limit_retry_after(conn, 'upload_gpu', ip)
+            retry_after = rate_limit.rate_limit_retry_after(conn, 'upload_gpu', ip, rate_limits=rate_limits)
         conn.commit()
         conn.close()
         if retry_after:
