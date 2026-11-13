@@ -10,11 +10,14 @@ import pillow_avif  # noqa: F401  (importing registers the AVIF plugin with Pill
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from argon2 import PasswordHasher
+ph = PasswordHasher()
 from argon2.exceptions import VerifyMismatchError
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 import resend
 from dotenv import load_dotenv
 import random
+import re
+EMAIL_RE = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 import time
 import requests
 from utils import rate_limit, email, http
@@ -207,6 +210,7 @@ init_db()
 
 # Helper functions defined in helpers.py
 import helpers
+serializer = URLSafeTimedSerializer(config.SECRET_KEY)
 helpers.set_globals(serializer, SMOKE_TEST_USER, JOB_RETENTION_SECONDS)
 _is_smoke_test_request = helpers._is_smoke_test_request
 job_owner = helpers.job_owner
@@ -259,13 +263,18 @@ def verify_webhook_signature(headers, payload):
     return False
 
 
-def confirmation_quota_remaining(conn, email):
+# Time window for confirmation resend quota (5 minutes)
+CONFIRM_RESEND_WINDOW = 300
+# Maximum confirmation emails within the resend window
+CONFIRM_RESEND_LIMIT = 3
+
+def confirmation_quota_remaining(conn, username):
     """True if this address is still under its send limit for the window."""
     cutoff = int(time.time()) - CONFIRM_RESEND_WINDOW
     conn.execute("DELETE FROM confirmation_sends WHERE sent_at < ?", (cutoff,))
     recent = conn.execute(
         "SELECT COUNT(*) FROM confirmation_sends WHERE email = ? AND sent_at >= ?",
-        (email, cutoff)
+        (username, cutoff)
     ).fetchone()[0]
     return recent < CONFIRM_RESEND_LIMIT
 

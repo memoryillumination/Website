@@ -5,7 +5,7 @@ import random
 RATE_LIMITS = {
     'upload':     (20, 900),
     'upload_gpu': (10, 900),
-    'register':   (3, 900),
+    'register':   (10, 900),
     'login':      (20, 900),
     'resend':     (2, 1800),
     'confirm':    (5, 300),
