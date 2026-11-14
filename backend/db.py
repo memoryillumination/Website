@@ -4,6 +4,7 @@ Encapsulates database connection management, initialization, and schema manageme
 """
 import sqlite3
 import os
+import time
 
 DB_NAME = os.environ.get("DB_NAME", "users.db")
 SMOKE_TEST_DB = os.environ.get("SMOKE_TEST_DB", "").strip()
@@ -132,3 +133,16 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def periodic_cleanup():
+    """Clean up old rate limit entries and jobs. Run periodically."""
+    conn = get_db_connection()
+    try:
+        # Clean up old rate limit entries (older than the largest window: 1800s)
+        conn.execute("DELETE FROM rate_limits WHERE hit_at < ?", (int(time.time()) - 1800,))
+        # Clean up old jobs (older than JOB_RETENTION_SECONDS)
+        conn.execute("DELETE FROM jobs WHERE created_at < ?", (int(time.time()) - 86400,))
+        conn.commit()
+    finally:
+        conn.close()

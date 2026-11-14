@@ -6,7 +6,7 @@ from flask import request, jsonify, send_file
 from utils import http
 
 
-def register_routes(app, get_db_connection, job_owner, load_job, sweep_old_jobs,
+def register_routes(app, get_db_connection, job_owner, load_job,
                    fetch_job_result, estimate_seconds, job_phase, job_max_age_seconds,
                    watermark_available, apply_watermark):
     """Register the job management routes."""

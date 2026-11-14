@@ -14,7 +14,7 @@ def register_routes(app, get_db_connection, serializer, deploy_env, is_productio
                    cookie_domain, normalize_image, unsupported_image_error,
                    image_too_large_error, is_smoke_test_request,
                    predict_cold_start, spawn_remote_diffusion, job_owner,
-                   sweep_old_jobs, estimate_seconds, run_diffusion_workflow,
+                   estimate_seconds, run_diffusion_workflow,
                    apply_watermark, watermark_available, use_modal,
                    cold_estimate_seconds, warm_estimate_seconds, rate_limits=None):
     """Register the upload endpoint."""
@@ -82,7 +82,6 @@ def register_routes(app, get_db_connection, serializer, deploy_env, is_productio
                     "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
                     (job_id, call_id, job_owner(token, ip), int(is_free_tier), int(cold_start), int(time.time()))
                 )
-                sweep_old_jobs(conn)
                 conn.commit()
 
                 print(

@@ -209,30 +209,15 @@ init_db = db.init_db
 DB_NAME = db.DB_NAME
 init_db()
 
-# Periodic cleanup: run every 100 requests
-_request_count = 0
-_CLEANUP_INTERVAL = 100
-
-def periodic_cleanup():
-    """Clean up old rate limit entries and jobs. Run periodically."""
-    conn = get_db_connection()
-    try:
-        # Clean up old rate limit entries (older than the largest window: 1800s)
-        conn.execute("DELETE FROM rate_limits WHERE hit_at < ?", (int(time.time()) - 1800,))
-        # Clean up old jobs
-        conn.execute("DELETE FROM jobs WHERE created_at < ?", (int(time.time()) - JOB_RETENTION_SECONDS,))
-        conn.commit()
-    finally:
-        conn.close()
-
 @app.before_request
 def increment_request_count():
     """Increment request counter and run periodic cleanup every 100 requests."""
-    global _request_count
-    _request_count += 1
-    if _request_count >= _CLEANUP_INTERVAL:
-        _request_count = 0
-        periodic_cleanup()
+    request_count = 0
+    CLEANUP_INTERVAL = 100
+    request_count += 1
+    if request_count >= _CLEANUP_INTERVAL:
+        request_count = 0
+        db.periodic_cleanup()
 
 
 # --- RATE LIMITING ---
@@ -245,7 +230,6 @@ helpers.set_globals(serializer, SMOKE_TEST_USER, JOB_RETENTION_SECONDS)
 _is_smoke_test_request = helpers._is_smoke_test_request
 job_owner = helpers.job_owner
 load_job = helpers.load_job
-sweep_old_jobs = helpers.sweep_old_jobs
 
 
 # --- EMAIL CONFIRMATION ---
@@ -682,7 +666,7 @@ def _register_upload_routes():
                    COOKIE_DOMAIN, normalize_image, UnsupportedImageError,
                    ImageTooLargeError, _is_smoke_test_request,
                    predict_cold_start, spawn_remote_diffusion, job_owner,
-                   sweep_old_jobs, estimate_seconds, run_diffusion_workflow,
+                   estimate_seconds, run_diffusion_workflow,
                    apply_watermark, WATERMARK_AVAILABLE, USE_MODAL,
                    COLD_ESTIMATE_SECONDS, WARM_ESTIMATE_SECONDS, RATE_LIMITS)
 _register_upload_routes()
@@ -705,7 +689,7 @@ def job_phase(row, elapsed):
 # Job management routes defined in jobs.py
 def _register_job_routes():
     from jobs import register_routes
-    register_routes(app, get_db_connection, job_owner, load_job, sweep_old_jobs,
+    register_routes(app, get_db_connection, job_owner, load_job,
                    fetch_job_result, estimate_seconds, job_phase, JOB_MAX_AGE_SECONDS,
                    WATERMARK_AVAILABLE, apply_watermark)
 _register_job_routes()

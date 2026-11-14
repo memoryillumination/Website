@@ -50,9 +50,3 @@ def load_job(conn, job_id, owner):
     return conn.execute(
         "SELECT * FROM jobs WHERE id = ? AND owner = ?", (job_id, owner)
     ).fetchone()
-
-
-def sweep_old_jobs(conn):
-    # Periodic cleanup now handles this via @app.before_request
-    # every 100 requests. This function is kept for backward compatibility.
-    pass
