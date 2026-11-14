@@ -243,7 +243,7 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
                 resp.set_cookie('session', token,
                                path='/', domain=SESSION_COOKIE_DOMAIN,
                                secure=deploy_env == 'production', httponly=True,
-                               expires=time.time() + 604800)
+                               samesite='Lax', max_age=604800)
                 conn.commit()
                 conn.close()
                 return resp
@@ -280,5 +280,5 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
         resp.set_cookie('session', '',
                        path='/', domain=SESSION_COOKIE_DOMAIN,
                        secure=deploy_env == 'production', httponly=True,
-                       expires=0)
+                       samesite='Lax', max_age=0)
         return resp
