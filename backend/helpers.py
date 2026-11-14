@@ -1,5 +1,4 @@
 """Helper functions used across multiple route modules."""
-import random
 import time
 from flask import request
 
@@ -54,8 +53,6 @@ def load_job(conn, job_id, owner):
 
 
 def sweep_old_jobs(conn):
-    if random.random() < 0.05:
-        conn.execute(
-            "DELETE FROM jobs WHERE created_at < ?",
-            (int(time.time()) - _job_retention_seconds,)
-        )
+    # Periodic cleanup now handles this via @app.before_request
+    # every 100 requests. This function is kept for backward compatibility.
+    pass

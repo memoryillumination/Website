@@ -209,6 +209,31 @@ init_db = db.init_db
 DB_NAME = db.DB_NAME
 init_db()
 
+# Periodic cleanup: run every 100 requests
+_request_count = 0
+_CLEANUP_INTERVAL = 100
+
+def periodic_cleanup():
+    """Clean up old rate limit entries and jobs. Run periodically."""
+    conn = get_db_connection()
+    try:
+        # Clean up old rate limit entries (older than the largest window: 1800s)
+        conn.execute("DELETE FROM rate_limits WHERE hit_at < ?", (int(time.time()) - 1800,))
+        # Clean up old jobs
+        conn.execute("DELETE FROM jobs WHERE created_at < ?", (int(time.time()) - JOB_RETENTION_SECONDS,))
+        conn.commit()
+    finally:
+        conn.close()
+
+@app.before_request
+def increment_request_count():
+    """Increment request counter and run periodic cleanup every 100 requests."""
+    global _request_count
+    _request_count += 1
+    if _request_count >= _CLEANUP_INTERVAL:
+        _request_count = 0
+        periodic_cleanup()
+
 
 # --- RATE LIMITING ---
 # Functions moved to utils/rate_limit.py

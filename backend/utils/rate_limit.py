@@ -1,5 +1,4 @@
 import time
-import random
 
 def rate_limit_retry_after(conn, name, identifier, record=True, rate_limits=None):
     """
@@ -39,9 +38,6 @@ def rate_limit_retry_after(conn, name, identifier, record=True, rate_limits=None
     if record:
         conn.execute("INSERT INTO rate_limits (bucket, hit_at) VALUES (?, ?)", (bucket, now))
 
-    if random.random() < 0.01:
-        longest = max(w for _, w in rate_limits.values())
-        conn.execute("DELETE FROM rate_limits WHERE hit_at < ?", (now - longest,))
     return 0
 
 
