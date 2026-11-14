@@ -114,11 +114,21 @@ WATERMARK_SPACING = config.WATERMARK_SPACING
 # free-tier output simply goes out unwatermarked.
 WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_LOGO_wordmark_transparent.png")
 WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and os.path.exists(WATERMARK_PATH)
-if WATERMARK_FREE_TIER and not WATERMARK_AVAILABLE:
-    print(
-        f"⚠️  WATERMARK_FREE_TIER is enabled but {WATERMARK_PATH} is missing — "
-        "free-tier output will NOT be watermarked."
-    )
+
+# Load watermark image once at startup for reuse across requests
+WATERMARK_IMAGE = None
+if WATERMARK_AVAILABLE:
+    try:
+        WATERMARK_IMAGE = Image.open(WATERMARK_PATH).convert("RGBA")
+    except Exception as e:
+        print(f"⚠️  Failed to load watermark image {WATERMARK_PATH}: {e}")
+        WATERMARK_AVAILABLE = False
+else:
+    if WATERMARK_FREE_TIER and not os.path.exists(WATERMARK_PATH):
+        print(
+            f"⚠️  WATERMARK_FREE_TIER is enabled but {WATERMARK_PATH} is missing — "
+            "free-tier output will NOT be watermarked."
+        )
 
 app = Flask(__name__)
 
@@ -339,7 +349,8 @@ _register_auth_routes()
 
 def apply_watermark(image_bytes):
     output = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-    logo = Image.open(WATERMARK_PATH).convert("RGBA")
+    # Use cached watermark image loaded at startup
+    logo = WATERMARK_IMAGE.copy()
 
     # Scale logo based on configured scale factor
     logo_w = max(int(output.width * WATERMARK_SCALE), 50)
