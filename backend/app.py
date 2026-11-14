@@ -112,7 +112,7 @@ WATERMARK_SPACING = config.WATERMARK_SPACING
 # Resolved once at startup so a missing asset costs one warning instead of an
 # exception per upload. Watermarking is best-effort: if the file isn't there,
 # free-tier output simply goes out unwatermarked.
-WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_Watermark.png")
+WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_LOGO_wordmark_transparent.png")
 WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and os.path.exists(WATERMARK_PATH)
 if WATERMARK_FREE_TIER and not WATERMARK_AVAILABLE:
     print(
@@ -133,11 +133,6 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 SITE_BASE_URL = config.SITE_BASE_URL
 API_BASE_URL = config.API_BASE_URL
 FRONTEND_PORT = config.FRONTEND_PORT
-
-if IS_PRODUCTION:
-    CORS(app, resources={r"/*": {"origins": [SITE_BASE_URL]}})
-else:
-    CORS(app)
 
 if IS_PRODUCTION:
     CORS_ORIGINS = [SITE_BASE_URL]

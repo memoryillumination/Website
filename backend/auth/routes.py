@@ -233,8 +233,6 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
             ).fetchone()
 
             if user and ph.verify(user['password_hash'], password):
-                rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip(), rate_limits=rate_limits)
-
                 if not user['is_active'] and 'smoketest-' not in username:
                     conn.commit()
                     conn.close()
@@ -250,6 +248,7 @@ def register_routes(app, get_db_connection, ph, serializer, deploy_env, is_produ
                 conn.close()
                 return resp
             else:
+                rate_limit.rate_limit_retry_after(conn, 'login', http.client_ip(), rate_limits=rate_limits)
                 conn.commit()
                 conn.close()
                 return jsonify({"error": "Invalid email or password."}), 401
