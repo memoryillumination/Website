@@ -10,13 +10,17 @@ import pillow_avif  # noqa: F401  (importing registers the AVIF plugin with Pill
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 from argon2 import PasswordHasher
+ph = PasswordHasher()
 from argon2.exceptions import VerifyMismatchError
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 import resend
 from dotenv import load_dotenv
 import random
+import re
+EMAIL_RE = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 import time
 import requests
+from utils import rate_limit, email, http
 
 pillow_heif.register_heif_opener()
 
@@ -56,41 +60,75 @@ else:
 # INFERENCE_BACKEND -- where diffusion runs, which is a genuinely separate
 #   question: you can point a local frontend at the Modal GPU, or run the local
 #   worker behind a production frontend.
-def _require_choice(name, default, choices):
-    """
-    Read a setting and fail loudly on anything unrecognised.
+# Import configuration
+from config import config
 
-    An unvalidated DEPLOY_ENV fails *open*: 'prod' or 'Production' is simply
-    not equal to 'production', so the app would quietly drop into development
-    mode on a live host -- session cookies losing Secure and their domain, and
-    CORS accepting localhost and RFC1918 origins with credentials. Refusing to
-    start is the safer failure.
-    """
-    value = os.environ.get(name, default).strip().lower()
-    if value not in choices:
-        raise RuntimeError(
-            f"{name} must be one of {sorted(choices)}, got {value!r}. "
-            f"Checked .env at: {ENV_PATH or 'not found'}"
-        )
-    return value
-
-
-DEPLOY_ENV = _require_choice('DEPLOY_ENV', 'production', {'development', 'production'})
+DEPLOY_ENV = config.DEPLOY_ENV
 IS_PRODUCTION = DEPLOY_ENV == 'production'
+LOCAL_WORKER_URL = config.LOCAL_WORKER_URL
+SITE_BASE_URL = config.SITE_BASE_URL
+API_BASE_URL = config.API_BASE_URL
+FRONTEND_PORT = config.FRONTEND_PORT
+SECRET_KEY = config.SECRET_KEY
+EMAIL_API_KEY = config.EMAIL_API_KEY
+MAIL_FROM = config.MAIL_FROM
+MAIL_REPLY_TO = config.MAIL_REPLY_TO
+RESEND_WEBHOOK_SECRET = config.RESEND_WEBHOOK_SECRET
+_SMOKETEST_DB = config.SMOKE_TEST_DB
+SMOKE_TEST_USER = config.SMOKE_TEST_USER
 
-INFERENCE_BACKEND = _require_choice('INFERENCE_BACKEND', 'modal', {'local', 'modal'})
+INFERENCE_BACKEND = os.environ.get('INFERENCE_BACKEND', 'modal').strip().lower()
 USE_MODAL = INFERENCE_BACKEND == 'modal'
 
-# The local worker is flux_1_kontext.py, a separate Flask process holding the
-# quantised model resident on the Intel XPU. Started independently of this app.
-LOCAL_WORKER_URL = os.environ.get('LOCAL_WORKER_URL', 'http://127.0.0.1:5001/generate')
+# Rate limits
+RATE_LIMITS = {
+    'upload':     config.RATE_LIMITS.get('upload', {'limit': 20, 'window': 900}),
+    'upload_gpu': config.RATE_LIMITS.get('upload_gpu', {'limit': 5, 'window': 900}),
+    'register':   config.RATE_LIMITS.get('register', {'limit': 3, 'window': 900}),
+    'login':      config.RATE_LIMITS.get('login', {'limit': 20, 'window': 900}),
+    'resend':     config.RATE_LIMITS.get('resend', {'limit': 2, 'window': 1800}),
+    'confirm':    config.RATE_LIMITS.get('confirm', {'limit': 5, 'window': 300}),
+    'tier':       config.RATE_LIMITS.get('tier', {'limit': 3, 'window': 600}),
+}
 
-# When True, output for free-tier (and unauthenticated) callers is watermarked.
-# Off by default because MI_LOGO_wordmark_transparent.png is not checked into the repo — see the
-# availability check next to WATERMARK_PATH below. If this is turned on while
-# the asset is missing, startup logs a warning and uploads continue
-# unwatermarked rather than failing.
-WATERMARK_FREE_TIER = False
+# Timeouts and retention
+CONFIRM_TOKEN_MAX_AGE = config.CONFIRM_TOKEN_MAX_AGE
+JOB_RETENTION_SECONDS = config.JOB_RETENTION_SECONDS
+COLD_ESTIMATE_SECONDS = config.COLD_ESTIMATE_SECONDS
+WARM_ESTIMATE_SECONDS = config.WARM_ESTIMATE_SECONDS
+JOB_MAX_AGE_SECONDS = config.JOB_MAX_AGE_SECONDS
+CONTAINER_IDLE_TIMEOUT = config.CONTAINER_IDLE_TIMEOUT
+
+# Upload limits
+MAX_UPLOAD_BYTES = config.MAX_UPLOAD_BYTES
+MAX_UPLOAD_PX = config.MAX_UPLOAD_PX
+
+# Watermarking
+WATERMARK_FREE_TIER = config.WATERMARK_FREE_TIER
+WATERMARK_OPACITY = config.WATERMARK_OPACITY
+WATERMARK_SCALE = config.WATERMARK_SCALE
+WATERMARK_SPACING = config.WATERMARK_SPACING
+
+# Resolved once at startup so a missing asset costs one warning instead of an
+# exception per upload. Watermarking is best-effort: if the file isn't there,
+# free-tier output simply goes out unwatermarked.
+WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_LOGO_wordmark_transparent.png")
+WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and os.path.exists(WATERMARK_PATH)
+
+# Load watermark image once at startup for reuse across requests
+WATERMARK_IMAGE = None
+if WATERMARK_AVAILABLE:
+    try:
+        WATERMARK_IMAGE = Image.open(WATERMARK_PATH).convert("RGBA")
+    except Exception as e:
+        print(f"⚠️  Failed to load watermark image {WATERMARK_PATH}: {e}")
+        WATERMARK_AVAILABLE = False
+else:
+    if WATERMARK_FREE_TIER and not os.path.exists(WATERMARK_PATH):
+        print(
+            f"⚠️  WATERMARK_FREE_TIER is enabled but {WATERMARK_PATH} is missing — "
+            "free-tier output will NOT be watermarked."
+        )
 
 app = Flask(__name__)
 
@@ -102,17 +140,9 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 # Origins are derived from DEPLOY_ENV but can be overridden explicitly. The
 # localhost entries are added only outside production: allowing them there
 # would let a page on any visitor's own machine call this API with credentials.
-SITE_BASE_URL = os.environ.get(
-    'SITE_BASE_URL',
-    'https://memoryillumination.com' if IS_PRODUCTION else 'http://localhost:8000',
-)
-API_BASE_URL = os.environ.get(
-    'API_BASE_URL',
-    'https://api.memoryillumination.com' if IS_PRODUCTION else 'http://localhost:5000',
-)
-
-# Port the frontend dev server listens on, used to build the permitted origin.
-FRONTEND_PORT = os.environ.get('FRONTEND_PORT', '8000')
+SITE_BASE_URL = config.SITE_BASE_URL
+API_BASE_URL = config.API_BASE_URL
+FRONTEND_PORT = config.FRONTEND_PORT
 
 if IS_PRODUCTION:
     CORS_ORIGINS = [SITE_BASE_URL]
@@ -150,20 +180,20 @@ COOKIE_SECURE = IS_PRODUCTION
 
 # Config
 app.config.update(
-    SECRET_KEY=os.environ.get('SECRET_KEY'),
+    SECRET_KEY=config.SECRET_KEY,
 )
 
 # Transactional email goes through Resend, sending from the verified
 # mail.memoryillumination.com subdomain. REPLY_TO is a real inbox (Cloudflare
 # Email Routing) so replies to a noreply@ sender don't vanish.
-resend.api_key = os.environ.get('EMAIL_API_KEY')
-MAIL_FROM = os.environ.get('MAIL_FROM', 'Memory Illumination <noreply@mail.memoryillumination.com>')
-MAIL_REPLY_TO = os.environ.get('MAIL_REPLY_TO', 'support@memoryillumination.com')
+resend.api_key = config.EMAIL_API_KEY
+MAIL_FROM = config.MAIL_FROM
+MAIL_REPLY_TO = config.MAIL_REPLY_TO
 
 # Signing secret for the Resend webhook (Svix format, "whsec_..."). Without it
 # the webhook endpoint rejects everything — an unauthenticated suppression
 # endpoint would let anyone block delivery to any address.
-RESEND_WEBHOOK_SECRET = os.environ.get('RESEND_WEBHOOK_SECRET')
+RESEND_WEBHOOK_SECRET = config.RESEND_WEBHOOK_SECRET
 WEBHOOK_TOLERANCE = 300           # max age of a webhook timestamp, in seconds
 
 # Per-IP rate limits as {name: (max_requests, window_seconds)}. Enforced in
@@ -171,238 +201,40 @@ WEBHOOK_TOLERANCE = 300           # max age of a webhook timestamp, in seconds
 # 'login' counts only failed attempts, so a legitimate user is never locked out.
 # 'upload_gpu' is deliberately the tightest: featureB dispatches to Modal, and
 # that is the only path here that costs money per request.
-RATE_LIMITS = {
-    'register':   (5, 3600),
-    'resend':     (10, 3600),
-    'login':      (20, 900),
-    'upload':     (30, 3600),
-    'upload_gpu': (10, 3600),
-}
+# (Loaded from config.RATE_LIMITS at top of file)
 
-CONFIRM_TOKEN_MAX_AGE = 3600      # 1 hour, matches the copy in the email body
-CONFIRM_RESEND_WINDOW = 3600      # throttle window for confirmation sends
-CONFIRM_RESEND_LIMIT = 3          # max confirmation emails per address per window
-
-# Deliberately permissive: real validation is "did the confirmation email
-# arrive". This only rejects input that can't be an address at all, so we
-# don't hand obvious garbage to Resend and rack up bounces.
-EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$')
-
-if not app.config['SECRET_KEY']:
-    # Without this URLSafeTimedSerializer(None) raises an opaque TypeError at
-    # import and every uWSGI worker dies with no indication why.
-    raise RuntimeError(
-        "SECRET_KEY is not set. Checked .env at: "
-        + (ENV_PATH or f"none found; looked in {', '.join(ENV_CANDIDATES)}")
-    )
-
-serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
-ph = PasswordHasher()
-DB_NAME = os.path.join(os.path.dirname(__file__), "users.db")
-
-
-def get_db_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-# --- DATABASE INITIALIZATION ---
-def init_db():
-    conn = get_db_connection()
-
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS subscription_tiers (
-            id              INTEGER PRIMARY KEY,
-            name            TEXT NOT NULL UNIQUE,
-            display_name    TEXT NOT NULL,
-            max_conversions INTEGER  -- NULL = unlimited / custom negotiated
-        )
-    ''')
-
-    conn.executemany('''
-        INSERT OR IGNORE INTO subscription_tiers (id, name, display_name, max_conversions)
-        VALUES (?, ?, ?, ?)
-    ''', [
-        (1, 'sample',        'Sample',                                  None),
-        (2, 'introductory',  'Introductory',                            None),
-        (3, 'complete',      'Complete',                                None),
-        (4, 'business',      'Business / Organization / Professional',  None),
-    ])
-
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-            username             TEXT UNIQUE NOT NULL,
-            password_hash        TEXT NOT NULL,
-            is_active            INTEGER DEFAULT 0,
-            subscription_tier_id INTEGER DEFAULT 1
-                                 REFERENCES subscription_tiers(id),
-            has_completed_tour   INTEGER DEFAULT 0
-        )
-    ''')
-
-    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
-    if 'subscription_tier_id' not in existing_cols:
-        conn.execute('''
-            ALTER TABLE users
-            ADD COLUMN subscription_tier_id INTEGER DEFAULT 1
-                       REFERENCES subscription_tiers(id)
-        ''')
-    if 'has_completed_tour' not in existing_cols:
-        conn.execute('''
-            ALTER TABLE users
-            ADD COLUMN has_completed_tour INTEGER DEFAULT 0
-        ''')
-
-    # Throttle log for confirmation emails. Kept in SQLite rather than process
-    # memory so the limit holds across uWSGI workers.
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS confirmation_sends (
-            id      INTEGER PRIMARY KEY AUTOINCREMENT,
-            email   TEXT NOT NULL,
-            sent_at INTEGER NOT NULL
-        )
-    ''')
-    conn.execute('''
-        CREATE INDEX IF NOT EXISTS idx_confirmation_sends_email
-        ON confirmation_sends (email, sent_at)
-    ''')
-
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS rate_limits (
-            bucket TEXT NOT NULL,
-            hit_at INTEGER NOT NULL
-        )
-    ''')
-    conn.execute('''
-        CREATE INDEX IF NOT EXISTS idx_rate_limits_bucket
-        ON rate_limits (bucket, hit_at)
-    ''')
-
-    # Addresses we must stop mailing: hard bounces (the mailbox does not exist)
-    # and spam complaints. Kept separate from users so a suppression survives
-    # the account being deleted and re-created.
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS email_suppressions (
-            email      TEXT PRIMARY KEY,
-            reason     TEXT NOT NULL,
-            detail     TEXT,
-            created_at INTEGER NOT NULL
-        )
-    ''')
-
-    # Async GPU jobs. Lives in SQLite rather than process memory for the same
-    # reason confirmation_sends does: uWSGI runs 4 worker processes, so the
-    # request that polls a job is usually not the one that created it.
-    #
-    # Result bytes are deliberately NOT stored here. Modal retains outputs for
-    # up to 7 days, so /jobs/<id>/result re-fetches from the FunctionCall and
-    # SQLite only holds the metadata needed to authorize and label that fetch.
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS jobs (
-            id           TEXT PRIMARY KEY,
-            call_id      TEXT NOT NULL,
-            owner        TEXT NOT NULL,
-            is_free_tier INTEGER NOT NULL,
-            cold_start   INTEGER NOT NULL,
-            status       TEXT NOT NULL,
-            error        TEXT,
-            created_at   INTEGER NOT NULL,
-            finished_at  INTEGER
-        )
-    ''')
-    conn.execute('''
-        CREATE INDEX IF NOT EXISTS idx_jobs_created
-        ON jobs (created_at)
-    ''')
-
-    conn.commit()
-    conn.close()
-
+import db
+get_db_connection = db.get_db_connection
+init_db = db.init_db
+DB_NAME = db.DB_NAME
 init_db()
+
+@app.before_request
+def increment_request_count():
+    """Increment request counter and run periodic cleanup every 100 requests."""
+    request_count = 0
+    CLEANUP_INTERVAL = 100
+    request_count += 1
+    if request_count >= _CLEANUP_INTERVAL:
+        request_count = 0
+        db.periodic_cleanup()
 
 
 # --- RATE LIMITING ---
+# Functions moved to utils/rate_limit.py
 
-def client_ip():
-    """
-    Caller's address.
-
-    Nginx reaches uWSGI over the uwsgi protocol (uwsgi_pass), and its
-    uwsgi_params sets REMOTE_ADDR to $remote_addr — the real client address,
-    since api.memoryillumination.com is a DNS-only record pointing straight at
-    the droplet with nothing proxying in front of it.
-
-    Deliberately does NOT consult X-Forwarded-For. Nginx never sets that header
-    here, so it would carry only whatever the client chose to send: anyone could
-    rotate it per request and walk straight through every rate limit. If a proxy
-    (e.g. Cloudflare) is ever put in front of this API, trust its specific
-    header instead of re-adding a blanket ProxyFix.
-    """
-    return request.remote_addr or 'unknown'
-
-
-def rate_limit_retry_after(conn, name, identifier, record=True):
-    """
-    Seconds the caller must wait before retrying `name`, or 0 to proceed.
-
-    Set record=False to test a bucket without consuming quota — used by
-    /login so only failed attempts count against the limit.
-    """
-    limit, window = RATE_LIMITS[name]
-    bucket = f"{name}:{identifier}"
-    now = int(time.time())
-
-    # Prune this bucket only. A global sweep here would use one endpoint's
-    # window to delete rows another endpoint still needs.
-    conn.execute("DELETE FROM rate_limits WHERE bucket = ? AND hit_at < ?", (bucket, now - window))
-
-    hits = [r[0] for r in conn.execute(
-        "SELECT hit_at FROM rate_limits WHERE bucket = ? ORDER BY hit_at", (bucket,)
-    )]
-    if len(hits) >= limit:
-        # Quota frees up when the oldest hit falls out of the window.
-        return max(1, hits[0] + window - now)
-
-    if record:
-        conn.execute("INSERT INTO rate_limits (bucket, hit_at) VALUES (?, ?)", (bucket, now))
-
-    # Idle buckets are never revisited, so sweep them occasionally rather than
-    # letting the table grow without bound.
-    if random.random() < 0.01:
-        longest = max(w for _, w in RATE_LIMITS.values())
-        conn.execute("DELETE FROM rate_limits WHERE hit_at < ?", (now - longest,))
-    return 0
-
-
-def too_many_requests(retry_after):
-    response = jsonify({"error": "Too many requests. Please try again later."})
-    response.headers['Retry-After'] = str(retry_after)
-    return response, 429
+# Helper functions defined in helpers.py
+import helpers
+serializer = URLSafeTimedSerializer(config.SECRET_KEY)
+helpers.set_globals(serializer, SMOKE_TEST_USER, JOB_RETENTION_SECONDS)
+_is_smoke_test_request = helpers._is_smoke_test_request
+job_owner = helpers.job_owner
+load_job = helpers.load_job
 
 
 # --- EMAIL CONFIRMATION ---
 
-def is_email_suppressed(conn, email):
-    """True if this address hard-bounced or filed a spam complaint."""
-    return conn.execute(
-        "SELECT 1 FROM email_suppressions WHERE email = ?", (email,)
-    ).fetchone() is not None
-
-
-def suppress_email(conn, email, reason, detail=None):
-    """Record an address as undeliverable. Idempotent — webhooks get retried."""
-    conn.execute(
-        """INSERT INTO email_suppressions (email, reason, detail, created_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(email) DO UPDATE SET
-               reason = excluded.reason,
-               detail = excluded.detail,
-               created_at = excluded.created_at""",
-        (email, reason, detail, int(time.time()))
-    )
-
+# Email suppression functions moved to utils/email.py
 
 def verify_webhook_signature(headers, payload):
     """
@@ -445,13 +277,18 @@ def verify_webhook_signature(headers, payload):
     return False
 
 
-def confirmation_quota_remaining(conn, email):
+# Time window for confirmation resend quota (5 minutes)
+CONFIRM_RESEND_WINDOW = 300
+# Maximum confirmation emails within the resend window
+CONFIRM_RESEND_LIMIT = 3
+
+def confirmation_quota_remaining(conn, username):
     """True if this address is still under its send limit for the window."""
     cutoff = int(time.time()) - CONFIRM_RESEND_WINDOW
     conn.execute("DELETE FROM confirmation_sends WHERE sent_at < ?", (cutoff,))
     recent = conn.execute(
         "SELECT COUNT(*) FROM confirmation_sends WHERE email = ? AND sent_at >= ?",
-        (email, cutoff)
+        (username, cutoff)
     ).fetchone()[0]
     return recent < CONFIRM_RESEND_LIMIT
 
@@ -508,314 +345,29 @@ def _confirm_page(heading, body, ok=True):
 # endpoint can't be used to enumerate accounts.
 REGISTER_OK = {"message": "Check your email for a confirmation link."}
 
-
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.json or {}
-    username, password = data.get('username'), data.get('password')
-
-    if not isinstance(username, str) or not EMAIL_RE.match(username.strip()):
-        return jsonify({"error": "Enter a valid email address."}), 400
-    if not isinstance(password, str) or len(password) < 8:
-        return jsonify({"error": "Password must be at least 8 characters."}), 400
-    username = username.strip().lower()
-
-    try:
-        conn = get_db_connection()
-
-        retry_after = rate_limit_retry_after(conn, 'register', client_ip())
-        if retry_after:
-            conn.commit()
-            conn.close()
-            return too_many_requests(retry_after)
-
-        existing = conn.execute(
-            "SELECT is_active FROM users WHERE username = ?", (username,)
-        ).fetchone()
-
-        if existing is None:
-            conn.execute(
-                "INSERT INTO users (username, password_hash, is_active, subscription_tier_id) VALUES (?, ?, 0, 1)",
-                (username, ph.hash(password))
-            )
-            conn.commit()
-            should_send = True
-        else:
-            # Already registered. Re-send the link if they never confirmed;
-            # stay silent if the account is live, so an attacker can't tell
-            # the two cases apart and we don't email an existing user on demand.
-            should_send = existing['is_active'] == 0
-
-        if should_send and not is_email_suppressed(conn, username) \
-                and confirmation_quota_remaining(conn, username):
-            conn.execute(
-                "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
-                (username, int(time.time()))
-            )
-            conn.commit()
-            send_confirmation_email(username)
-
-        # Commit unconditionally: the rate-limit hit recorded above is rolled
-        # back on paths that send no mail, which would make the limit unenforceable.
-        conn.commit()
-        conn.close()
-        return jsonify(REGISTER_OK), 201
-    except Exception as e:
-        print(f"REGISTRATION ERROR for {username}: {e}")
-        return jsonify({"error": "Registration failed. Please try again."}), 500
+# Auth routes defined in auth/routes.py
+def _register_auth_routes():
+    from auth.routes import register_routes
+    register_routes(app, get_db_connection, ph, serializer, DEPLOY_ENV, IS_PRODUCTION,
+                   EMAIL_RE, MAIL_FROM, MAIL_REPLY_TO, COOKIE_DOMAIN,
+                   confirmation_quota_remaining, send_confirmation_email, _confirm_page,
+                   verify_webhook_signature, RATE_LIMITS)
+_register_auth_routes()
 
 
-@app.route('/resend-confirmation', methods=['POST'])
-def resend_confirmation():
-    data = request.json or {}
-    username = data.get('username')
-    if not isinstance(username, str) or not EMAIL_RE.match(username.strip()):
-        return jsonify({"error": "Enter a valid email address."}), 400
-    username = username.strip().lower()
-
-    try:
-        conn = get_db_connection()
-
-        retry_after = rate_limit_retry_after(conn, 'resend', client_ip())
-        if retry_after:
-            conn.commit()
-            conn.close()
-            return too_many_requests(retry_after)
-
-        user = conn.execute(
-            "SELECT is_active FROM users WHERE username = ?", (username,)
-        ).fetchone()
-
-        if user is not None and user['is_active'] == 0 \
-                and not is_email_suppressed(conn, username) \
-                and confirmation_quota_remaining(conn, username):
-            conn.execute(
-                "INSERT INTO confirmation_sends (email, sent_at) VALUES (?, ?)",
-                (username, int(time.time()))
-            )
-            conn.commit()
-            send_confirmation_email(username)
-
-        # See /register: the rate-limit hit must survive paths that send nothing.
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"RESEND CONFIRMATION ERROR for {username}: {e}")
-
-    return jsonify(REGISTER_OK), 200
-
-@app.route('/webhooks/resend', methods=['POST'])
-def resend_webhook():
-    """
-    Receives Resend delivery events. Hard bounces and spam complaints add the
-    address to email_suppressions so we stop mailing it — continuing to send to
-    dead mailboxes is what erodes domain reputation.
-    """
-    if not verify_webhook_signature(request.headers, request.get_data()):
-        return jsonify({"error": "Invalid signature"}), 401
-
-    event = request.get_json(silent=True) or {}
-    event_type = event.get('type')
-    data = event.get('data') or {}
-    recipients = data.get('to') or []
-    if isinstance(recipients, str):
-        recipients = [recipients]
-
-    if event_type == 'email.bounced':
-        bounce = data.get('bounce') or {}
-        # Only permanent failures are suppressed. A transient bounce (full
-        # mailbox, greylisting) resolves on its own and must stay deliverable.
-        if str(bounce.get('type', '')).lower() != 'permanent':
-            print(f"Resend soft bounce for {recipients}: {bounce.get('subType')}")
-            return jsonify({"status": "ignored"}), 200
-        reason, detail = 'hard_bounce', bounce.get('subType') or bounce.get('message')
-    elif event_type == 'email.complained':
-        reason, detail = 'complaint', 'marked as spam'
-    else:
-        # Delivered, opened, clicked, delayed: acknowledged so Resend stops
-        # retrying, but nothing to record.
-        return jsonify({"status": "ignored"}), 200
-
-    try:
-        conn = get_db_connection()
-        for address in recipients:
-            address = address.strip().lower()
-            if not address:
-                continue
-            suppress_email(conn, address, reason, detail)
-            print(f"Suppressed {address}: {reason} ({detail})")
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        # 500 tells Svix to retry, which is what we want for a transient DB error.
-        print(f"RESEND WEBHOOK ERROR ({event_type}): {e}")
-        return jsonify({"error": "Could not record event"}), 500
-
-    return jsonify({"status": "recorded"}), 200
-
-
-@app.route('/user/<username>/tier', methods=['PATCH'])
-def update_subscription_tier(username):
-    if request.headers.get('X-Admin-Key') != os.environ.get('ADMIN_KEY'):
-        return jsonify({"error": "Forbidden"}), 403
-
-    tier_id = request.json.get('tier_id')
-    if not isinstance(tier_id, int):
-        return jsonify({"error": "tier_id must be an integer"}), 400
-
-    conn = get_db_connection()
-    tier = conn.execute("SELECT * FROM subscription_tiers WHERE id = ?", (tier_id,)).fetchone()
-    if not tier:
-        conn.close()
-        return jsonify({"error": f"No tier with id {tier_id}"}), 404
-
-    result = conn.execute(
-        "UPDATE users SET subscription_tier_id = ? WHERE username = ?",
-        (tier_id, username)
-    )
-    conn.commit()
-    conn.close()
-
-    if result.rowcount == 0:
-        return jsonify({"error": "User not found"}), 404
-
-    return jsonify({
-        "message": "Tier updated",
-        "username": username,
-        "tier_id": tier["id"],
-        "tier_name": tier["display_name"]
-    }), 200
-
-@app.route('/confirm/<token>')
-def confirm_email(token):
-    try:
-        email = serializer.loads(token, salt='email-confirm', max_age=CONFIRM_TOKEN_MAX_AGE)
-    except SignatureExpired:
-        return _confirm_page(
-            "This link has expired",
-            "Confirmation links are valid for one hour. Request a new one from the login page.",
-            ok=False
-        ), 400
-    except BadSignature:
-        return _confirm_page(
-            "This link isn't valid",
-            "Check that you copied the whole link from the email.",
-            ok=False
-        ), 400
-
-    conn = get_db_connection()
-    result = conn.execute(
-        "UPDATE users SET is_active = 1 WHERE username = ?", (email,)
-    )
-    conn.commit()
-    conn.close()
-
-    # rowcount is 0 only if the account was deleted after the token was issued —
-    # a valid signature is no guarantee the user still exists.
-    if result.rowcount == 0:
-        return _confirm_page(
-            "Account not found",
-            "This account no longer exists. You can register again.",
-            ok=False
-        ), 404
-
-    return _confirm_page(
-        "Account confirmed",
-        "You're all set — you can now log in."
-    ), 200
-
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json or {}
-    # Must match the normalisation /register applies, or mixed-case input
-    # silently fails to find the row.
-    username = (data.get('username') or '').strip().lower()
-    conn = get_db_connection()
-
-    # Probe without recording: only failures below consume quota, so a user
-    # signing in normally is never locked out of their own account.
-    retry_after = rate_limit_retry_after(conn, 'login', client_ip(), record=False)
-    if retry_after:
-        conn.close()
-        return too_many_requests(retry_after)
-
-    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-    if user and user['is_active'] == 1:
-        try:
-            if ph.verify(user['password_hash'], data.get('password')):
-                conn.close()
-                token = serializer.dumps(username, salt='session')
-                response = make_response(jsonify({"success": True, "newUser": user['has_completed_tour'] == 0}), 200)
-                response.set_cookie(
-                    "session",
-                    value=token,
-                    max_age=604800,
-                    secure=COOKIE_SECURE,
-                    httponly=True,
-                    samesite="Lax",
-                    domain=COOKIE_DOMAIN
-                )
-                return response
-        except VerifyMismatchError: pass
-
-    # Reached only on failure: unknown user, unconfirmed account, or bad
-    # password. Record the attempt so repeated guessing hits the limit.
-    rate_limit_retry_after(conn, 'login', client_ip())
-    conn.commit()
-    conn.close()
-    return jsonify({"error": "Unauthorized"}), 401
-
-@app.route('/tour-complete', methods=['POST'])
-def complete_tour():
-    token = request.cookies.get('session', '')
-    try:
-        username = serializer.loads(token, salt='session', max_age=604800)
-    except Exception:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    conn = get_db_connection()
-    conn.execute("UPDATE users SET has_completed_tour = 1 WHERE username = ?", (username,))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True}), 200
-
-@app.route('/logout', methods=['POST'])
-def logout():
-    response = make_response(jsonify({"success": True}), 200)
-    response.set_cookie(
-        "session",
-        value="",
-        max_age=0,
-        secure=COOKIE_SECURE,
-        httponly=True,
-        samesite="Lax",
-        domain=COOKIE_DOMAIN
-    )
-    return response
-
-WATERMARK_PATH = os.path.join(os.path.dirname(__file__), "MI_LOGO_wordmark_transparent.png")
-
-# Resolved once at startup so a missing asset costs one warning instead of an
-# exception per upload. Watermarking is best-effort: if the file isn't there,
-# free-tier output simply goes out unwatermarked.
-WATERMARK_AVAILABLE = WATERMARK_FREE_TIER and os.path.exists(WATERMARK_PATH)
-if WATERMARK_FREE_TIER and not WATERMARK_AVAILABLE:
-    print(
-        f"⚠️  WATERMARK_FREE_TIER is enabled but {WATERMARK_PATH} is missing — "
-        "free-tier output will NOT be watermarked."
-    )
 
 def apply_watermark(image_bytes):
     output = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-    logo = Image.open(WATERMARK_PATH).convert("RGBA")
+    # Use cached watermark image loaded at startup
+    logo = WATERMARK_IMAGE.copy()
 
-    # Scale logo to 1/10 of image width
-    logo_w = max(output.width // 10, 50)
+    # Scale logo based on configured scale factor
+    logo_w = max(int(output.width * WATERMARK_SCALE), 50)
     aspect = logo.height / max(logo.width, 1)
     logo = logo.resize((logo_w, int(logo_w * aspect)), Image.LANCZOS)
 
-    # Diagonal tiling parameters
-    gap = logo_w // 3
+    # Diagonal tiling parameters based on configured spacing
+    gap = int(logo_w * WATERMARK_SPACING)
     diag = logo_w  # per-row diagonal offset
     cols = (output.width // (logo_w + gap)) + 4
     rows = (output.height // (logo_w + gap)) + 4
@@ -831,9 +383,9 @@ def apply_watermark(image_bytes):
             y = r * (logo_w + gap)
             tile_layer.paste(logo, (x, y), logo)
 
-    # Apply 12% opacity via alpha channel
+    # Apply configured opacity via alpha channel
     alpha = tile_layer.split()[3]
-    alpha = alpha.point(lambda a: int(a * 0.12))
+    alpha = alpha.point(lambda a: int(a * WATERMARK_OPACITY))
     tile_layer.putalpha(alpha)
 
     # Center the tile layer over the output image
@@ -1012,21 +564,7 @@ def run_diffusion_workflow(image_bytes, inference_params=None):
 # poll-confirmed elapsed time, actual completion) and eases between those
 # anchors. Tune from the "⏱️  upload-endpoint timing" and "⏱️  modal worker
 # timing" lines in the logs.
-WARM_ESTIMATE_SECONDS = 20   # container already up: inference + transfer only
-COLD_ESTIMATE_SECONDS = 80   # adds @modal.enter() loading FLUX bf16 onto the A100
-
-# flux_1_kontext_modal.py sets scaledown_window=300, so a container idle longer
-# than that is gone and the next call pays a cold start. Held slightly under the
-# real window: predicting cold and finishing early reads better than the reverse.
-CONTAINER_IDLE_TIMEOUT = 270
-
-# Job rows are metadata only. Keep a day for debugging, then sweep.
-JOB_RETENTION_SECONDS = 86400
-
-# Ceiling on retrying a job we cannot reach Modal about. flux_1_kontext_modal.py
-# sets the function timeout to 600s, so past this the worker cannot still be
-# running and the job is genuinely lost rather than merely unreachable.
-JOB_MAX_AGE_SECONDS = 660
+# (Loaded from config at top of file)
 
 
 def predict_cold_start(conn):
@@ -1050,17 +588,6 @@ def predict_cold_start(conn):
 
 def estimate_seconds(cold_start):
     return COLD_ESTIMATE_SECONDS if cold_start else WARM_ESTIMATE_SECONDS
-
-
-def job_owner(token, ip):
-    """
-    Identity a job is bound to, so one caller cannot poll another's job.
-    Falls back to IP for the anonymous uploads this endpoint still allows.
-    """
-    try:
-        return f"user:{serializer.loads(token, salt='session', max_age=604800)}"
-    except Exception:
-        return f"ip:{ip}"
 
 
 def spawn_remote_diffusion(image_bytes):
@@ -1132,160 +659,17 @@ def fetch_job_result(call_id):
         return 'error', "Something went wrong processing that image. Please try again."
 
 
-def load_job(conn, job_id, owner):
-    """The job row, but only for the caller that created it."""
-    return conn.execute(
-        "SELECT * FROM jobs WHERE id = ? AND owner = ?", (job_id, owner)
-    ).fetchone()
-
-
-def sweep_old_jobs(conn):
-    if random.random() < 0.05:
-        conn.execute(
-            "DELETE FROM jobs WHERE created_at < ?",
-            (int(time.time()) - JOB_RETENTION_SECONDS,)
-        )
-
-
-@app.route('/upload-endpoint', methods=['POST'])
-def upload_file():
-    t_start = time.perf_counter()
-
-    file     = request.files['myFile']
-    settings = json.loads(request.form.get('settings', '{}'))
-    token    = request.cookies.get('session', '')
-
-    # Checked before reading the upload body: this endpoint needs no session, so
-    # the per-IP limit is the only thing standing between an anonymous caller
-    # and unbounded Modal GPU spend.
-    ip = client_ip()
-    conn = get_db_connection()
-    retry_after = rate_limit_retry_after(conn, 'upload', ip)
-    if not retry_after and settings.get('featureB'):
-        retry_after = rate_limit_retry_after(conn, 'upload_gpu', ip)
-    conn.commit()
-    conn.close()
-    if retry_after:
-        return too_many_requests(retry_after)
-
-    input_data = file.read()
-
-    t_read = time.perf_counter()
-
-    try:
-        input_data = normalize_image(input_data)
-    except UnsupportedImageError as e:
-        return jsonify({"error": str(e)}), 400
-    except ImageTooLargeError as e:
-        return jsonify({"error": str(e)}), 413
-
-    t_normalize = time.perf_counter()
-
-    # Verify signed token and check subscription status (Keep unchanged)
-    is_free_tier = False
-    try:
-        username = serializer.loads(token, salt='session', max_age=604800)
-        conn = get_db_connection()
-        user = conn.execute(
-            "SELECT subscription_tier_id FROM users WHERE username = ?", (username,)
-        ).fetchone()
-        conn.close()
-        if user and user['subscription_tier_id'] == 1:
-            is_free_tier = True
-    except Exception:
-        is_free_tier = True
-
-    t_auth = time.perf_counter()
-
-    # Execution Routing Split — three destinations:
-    #
-    #   featureB + INFERENCE_BACKEND=modal  asynchronous. The remote GPU can run
-    #       for a minute or more, and pinning one of only 4 uWSGI workers that
-    #       long is what breaks first behind a proxy timeout, so the caller gets
-    #       a job id and polls /jobs/<id>.
-    #   featureB + INFERENCE_BACKEND=local  synchronous. The resident worker on
-    #       loopback answers on the same request, so there is no job to poll.
-    #   no featureB                          synchronous OpenCV, sub-second.
-    #
-    # Both synchronous routes return the PNG directly and the client branches on
-    # the response type, so only the Modal route exercises the polling path.
-    if settings.get('featureB') and USE_MODAL:
-        # rembg/cv2 pre-flatten pass, still skipped entirely:
-        # pre_simplified = simplify_for_coloring(input_data)
-        conn = get_db_connection()
-        try:
-            cold_start = predict_cold_start(conn)
-            call_id = spawn_remote_diffusion(input_data)
-        except Exception as e:
-            conn.close()
-            print(f"❌ Modal dispatch failure: {e}")
-            return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500
-
-        job_id = uuid.uuid4().hex
-        conn.execute(
-            "INSERT INTO jobs (id, call_id, owner, is_free_tier, cold_start, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-            (job_id, call_id, job_owner(token, ip), int(is_free_tier), int(cold_start), int(time.time()))
-        )
-        sweep_old_jobs(conn)
-        conn.commit()
-        conn.close()
-
-        print(
-            "⏱️  upload-endpoint dispatch — "
-            f"read: {t_read - t_start:.3f}s, "
-            f"normalize: {t_normalize - t_read:.3f}s, "
-            f"auth: {t_auth - t_normalize:.3f}s, "
-            f"job: {job_id}, cold_start: {cold_start}"
-        )
-        return jsonify({
-            "job_id": job_id,
-            "cold_start": cold_start,
-            "estimate_seconds": estimate_seconds(cold_start),
-        }), 202
-
-    try:
-        if settings.get('featureB'):
-            # INFERENCE_BACKEND=local. These params are read only by the local
-            # worker; the Modal worker hardcodes its own.
-            inference_params = {
-                'prompt': settings.get('prompt'),
-                'num_inference_steps': settings.get('num_inference_steps'),
-                'guidance_scale': settings.get('guidance_scale'),
-            }
-            result_bytes = run_diffusion_workflow(input_data, inference_params)
-        else:
-            # High speed OpenCV classic fallback path
-            img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
-            inv = 255 - img
-            blur = cv2.GaussianBlur(inv, (21, 21), 0)
-            sketch = cv2.divide(img, 255 - blur, scale=256)
-            _, buffer = cv2.imencode(".png", sketch)
-            result_bytes = bytes(buffer)
-    except Exception as e:
-        print(f"❌ Image processing failure: {e}")
-        return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500
-
-    t_process = time.perf_counter()
-
-    if WATERMARK_AVAILABLE and is_free_tier:
-        # Best-effort: a watermarking failure must not cost the user the image
-        # they already paid GPU time for, so fall back to the unmarked result.
-        try:
-            result_bytes = apply_watermark(result_bytes)
-        except Exception as e:
-            print(f"⚠️  Watermarking failed, returning unwatermarked image: {e}")
-
-    print(
-        "⏱️  upload-endpoint timing — "
-        f"read: {t_read - t_start:.3f}s, "
-        f"normalize: {t_normalize - t_read:.3f}s, "
-        f"auth: {t_auth - t_normalize:.3f}s, "
-        f"process: {t_process - t_auth:.3f}s, "
-        f"total: {t_process - t_start:.3f}s"
-    )
-
-    return send_file(io.BytesIO(result_bytes), mimetype='image/png')
+# Upload endpoint defined in upload.py
+def _register_upload_routes():
+    from upload import register_routes
+    register_routes(app, get_db_connection, serializer, DEPLOY_ENV, IS_PRODUCTION,
+                   COOKIE_DOMAIN, normalize_image, UnsupportedImageError,
+                   ImageTooLargeError, _is_smoke_test_request,
+                   predict_cold_start, spawn_remote_diffusion, job_owner,
+                   estimate_seconds, run_diffusion_workflow,
+                   apply_watermark, WATERMARK_AVAILABLE, USE_MODAL,
+                   COLD_ESTIMATE_SECONDS, WARM_ESTIMATE_SECONDS, RATE_LIMITS)
+_register_upload_routes()
 
 
 def job_phase(row, elapsed):
@@ -1302,102 +686,13 @@ def job_phase(row, elapsed):
     return 'generating'
 
 
-@app.route('/jobs/<job_id>', methods=['GET'])
-def job_status(job_id):
-    ip = client_ip()
-    owner = job_owner(request.cookies.get('session', ''), ip)
-
-    # try/finally rather than close-per-branch: an unexpected raise between here
-    # and the end used to leak the connection for the life of the worker.
-    conn = get_db_connection()
-    try:
-        row = load_job(conn, job_id, owner)
-        if row is None:
-            return jsonify({"error": "Job not found."}), 404
-
-        elapsed = int(time.time()) - row['created_at']
-        payload = {
-            "status": row['status'],
-            "elapsed": elapsed,
-            "cold_start": bool(row['cold_start']),
-            "estimate_seconds": estimate_seconds(row['cold_start']),
-        }
-
-        # Terminal states are recorded, so don't call Modal again for them.
-        if row['status'] != 'pending':
-            if row['status'] == 'error':
-                payload['error'] = row['error']
-            return jsonify(payload), 200
-
-        status, result = fetch_job_result(row['call_id'])
-
-        if status == 'transient':
-            # We could not reach Modal, which is not a verdict on the job — the
-            # GPU work may have succeeded. Recording it as terminal here would
-            # permanently kill a job over one blip, so report it as still
-            # pending and let the next poll ask again. Give up only once the
-            # worker could not possibly still be running.
-            if elapsed <= JOB_MAX_AGE_SECONDS:
-                status = 'pending'
-            else:
-                status = 'error'
-                result = "Lost contact with the image worker. Please try again."
-
-        if status == 'pending':
-            payload['phase'] = job_phase(row, elapsed)
-            return jsonify(payload), 200
-
-        # Record the terminal state so later polls (and a reload) are answered from
-        # SQLite. The bytes stay with Modal; /jobs/<id>/result re-fetches them.
-        error = result if status == 'error' else None
-        conn.execute(
-            "UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
-            (status, error, int(time.time()), job_id)
-        )
-        conn.commit()
-
-        payload['status'] = status
-        if status == 'error':
-            payload['error'] = error
-        return jsonify(payload), 200
-    finally:
-        conn.close()
-
-
-@app.route('/jobs/<job_id>/result', methods=['GET'])
-def job_result(job_id):
-    ip = client_ip()
-    owner = job_owner(request.cookies.get('session', ''), ip)
-
-    conn = get_db_connection()
-    row = load_job(conn, job_id, owner)
-    conn.close()
-    if row is None:
-        return jsonify({"error": "Job not found."}), 404
-
-    status, result = fetch_job_result(row['call_id'])
-    if status == 'pending':
-        return jsonify({"error": "That image isn't ready yet."}), 409
-    if status == 'transient':
-        # 503, not 500: the image is probably fine and retrying is the right move.
-        response = jsonify({"error": "Couldn't reach the image worker. Please try again in a moment."})
-        response.headers['Retry-After'] = '5'
-        return response, 503
-    if status == 'error':
-        return jsonify({"error": result}), 500
-
-    result_bytes = result
-    # Tier was captured when the job was submitted, so a mid-job upgrade or
-    # session expiry can't change the terms the image was generated under.
-    if WATERMARK_AVAILABLE and row['is_free_tier']:
-        # Best-effort, matching /upload-endpoint: a watermarking failure must
-        # not cost the user the image they already paid GPU time for.
-        try:
-            result_bytes = apply_watermark(result_bytes)
-        except Exception as e:
-            print(f"⚠️  Watermarking failed, returning unwatermarked image: {e}")
-
-    return send_file(io.BytesIO(result_bytes), mimetype='image/png')
+# Job management routes defined in jobs.py
+def _register_job_routes():
+    from jobs import register_routes
+    register_routes(app, get_db_connection, job_owner, load_job,
+                   fetch_job_result, estimate_seconds, job_phase, JOB_MAX_AGE_SECONDS,
+                   WATERMARK_AVAILABLE, apply_watermark)
+_register_job_routes()
 
 
 if __name__ == '__main__':

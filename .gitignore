@@ -2,6 +2,11 @@
 *CACHEDIR.TAG
 
 
+# Backend
+backend/pipelines
+backend/dev-utils
+
+
 # Logs
 logs
 *.log
@@ -73,6 +78,7 @@ web_modules/
 .env
 .env.*
 !.env.example
+!.env.test.example
 
 # Local databases and backup files
 users.db

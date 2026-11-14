@@ -215,11 +215,18 @@ Likely why: `positionTooltip()` at **`frontend/js/tour.js:60-67`** hardcodes a
 exactly the problem Floating UI (~6KB) exists to solve, and it would pay off
 immediately without adopting a framework.
 
-### 4.3 Watermarking is effectively off
-**`backend/app.py`** — `WATERMARK_FREE_TIER = False`, and `MI_Watermark.png` is
-not checked into the repo. Free-tier and anonymous output currently ships
-**unwatermarked**. The code path is written and best-effort guarded; it just
-never runs. Worth a deliberate decision rather than drifting.
+### 4.3 Watermarking is gated (off by default)
+**`backend/app.py`** — `WATERMARK_FREE_TIER = False`, so free-tier and anonymous
+output currently ships **unwatermarked**. The code path is now real and verified:
+`apply_watermark()` tiles the MI wordmark (rotated 45°, uniformly spaced, ~35%
+of the logo's own alpha) over both the synchronous `/upload-endpoint` path and
+the async `/jobs/<id>/result` path, gated on `WATERMARK_AVAILABLE and
+is_free_tier`. The asset is `MI_LOGO_wordmark_transparent.png`, now tracked in
+`backend/` beside `app.py` so the flattened deployed layout finds it (the
+`frontend/` copy is a repo-layout fallback). Flipping `WATERMARK_FREE_TIER` to
+True is the only thing standing between the site and watermarked free-tier
+output. A missing asset degrades to a startup warning + unwatermarked output
+rather than a 500.
 
 ### 4.4 Dead code left in place on purpose
 `run_diffusion_workflow` / `run_remote_diffusion_workflow` in
