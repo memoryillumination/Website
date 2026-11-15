@@ -215,7 +215,7 @@ def increment_request_count():
     request_count = 0
     CLEANUP_INTERVAL = 100
     request_count += 1
-    if request_count >= _CLEANUP_INTERVAL:
+    if request_count >= CLEANUP_INTERVAL:
         request_count = 0
         db.periodic_cleanup()
 
