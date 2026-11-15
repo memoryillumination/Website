@@ -361,6 +361,10 @@ def apply_watermark(image_bytes):
     # Use cached watermark image loaded at startup
     logo = WATERMARK_IMAGE.copy()
 
+    # Rotate logo based on configured angle
+    if config.WATERMARK_ROTATION_DEGREES != 0:
+        logo = logo.rotate(config.WATERMARK_ROTATION_DEGREES, expand=False)
+
     # Scale logo based on configured scale factor
     logo_w = max(int(output.width * WATERMARK_SCALE), 50)
     aspect = logo.height / max(logo.width, 1)
