@@ -99,7 +99,7 @@ def upload_image(session, use_gpu=False):
         print(f"❌ Test image not found at {TEST_IMAGE}")
         return None
 
-    settings = {"featureA": False, "featureB": use_gpu}
+    settings = {"featureB": use_gpu}
 
     with open(TEST_IMAGE, "rb") as f:
         resp = session.post(

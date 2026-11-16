@@ -3,8 +3,6 @@ import io
 import json
 import time
 import uuid
-import cv2
-import numpy as np
 from flask import request, jsonify, send_file
 
 from utils import rate_limit, http
@@ -67,51 +65,40 @@ def register_routes(app, get_db_connection, serializer, deploy_env, is_productio
 
             t_auth = time.perf_counter()
 
-            # Execution Routing Split
-            if settings.get('featureB') and use_modal:
-                try:
+            try:
+                # featureB is now the only option — sketch conversion has been
+                # removed, so every upload goes to the diffusion workflow.
+                if use_modal:
                     cold_start = predict_cold_start(conn)
                     call_id = spawn_remote_diffusion(input_data)
-                except Exception as e:
-                    print(f"❌ Modal dispatch failure: {e}")
-                    return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500
 
-                job_id = uuid.uuid4().hex
-                conn.execute(
-                    "INSERT INTO jobs (id, call_id, owner, is_free_tier, cold_start, status, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-                    (job_id, call_id, job_owner(token, ip), int(is_free_tier), int(cold_start), int(time.time()))
-                )
-                conn.commit()
+                    job_id = uuid.uuid4().hex
+                    conn.execute(
+                        "INSERT INTO jobs (id, call_id, owner, is_free_tier, cold_start, status, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+                        (job_id, call_id, job_owner(token, ip), int(is_free_tier), int(cold_start), int(time.time()))
+                    )
+                    conn.commit()
 
-                print(
-                    "⏱️  upload-endpoint dispatch — "
-                    f"read: {t_read - t_start:.3f}s, "
-                    f"normalize: {t_normalize - t_read:.3f}s, "
-                    f"auth: {t_auth - t_normalize:.3f}s, "
-                    f"job: {job_id}, cold_start: {cold_start}"
-                )
-                return jsonify({
-                    "job_id": job_id,
-                    "cold_start": cold_start,
-                    "estimate_seconds": estimate_seconds(cold_start),
-                }), 202
+                    print(
+                        "⏱️  upload-endpoint dispatch — "
+                        f"read: {t_read - t_start:.3f}s, "
+                        f"normalize: {t_normalize - t_read:.3f}s, "
+                        f"auth: {t_auth - t_normalize:.3f}s, "
+                        f"job: {job_id}, cold_start: {cold_start}"
+                    )
+                    return jsonify({
+                        "job_id": job_id,
+                        "cold_start": cold_start,
+                        "estimate_seconds": estimate_seconds(cold_start),
+                    }), 202
 
-            try:
-                if settings.get('featureB'):
-                    inference_params = {
-                        'prompt': settings.get('prompt'),
-                        'num_inference_steps': settings.get('num_inference_steps'),
-                        'guidance_scale': settings.get('guidance_scale'),
-                    }
-                    result_bytes = run_diffusion_workflow(input_data, inference_params)
-                else:
-                    img = cv2.imdecode(np.frombuffer(input_data, np.uint8), cv2.IMREAD_GRAYSCALE)
-                    inv = 255 - img
-                    blur = cv2.GaussianBlur(inv, (21, 21), 0)
-                    sketch = cv2.divide(img, 255 - blur, scale=256)
-                    _, buffer = cv2.imencode(".png", sketch)
-                    result_bytes = bytes(buffer)
+                inference_params = {
+                    'prompt': settings.get('prompt'),
+                    'num_inference_steps': settings.get('num_inference_steps'),
+                    'guidance_scale': settings.get('guidance_scale'),
+                }
+                result_bytes = run_diffusion_workflow(input_data, inference_params)
             except Exception as e:
                 print(f"❌ Image processing failure: {e}")
                 return jsonify({"error": "Something went wrong processing that image. Please try again."}), 500
