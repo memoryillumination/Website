@@ -27,7 +27,6 @@ window.addEventListener("DOMContentLoaded", () => {
   const tryAgainButton = document.querySelector("#try-again");
   const statusMessage = document.querySelector("#status-message");
   const fileInput = document.querySelector("#file-input");
-  const check2 = document.querySelector("#check-option-2");
   const progress = document.querySelector("#progress");
   const progressBar = document.querySelector("#progress-bar");
   const resultSection = document.querySelector("#result");

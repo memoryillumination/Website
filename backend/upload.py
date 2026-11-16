@@ -3,8 +3,6 @@ import io
 import json
 import time
 import uuid
-import cv2
-import numpy as np
 from flask import request, jsonify, send_file
 
 from utils import rate_limit, http

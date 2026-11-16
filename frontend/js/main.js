@@ -57,7 +57,6 @@ window.addEventListener("DOMContentLoaded", () => {
   const uploadForm = document.querySelector("#upload-form");
   const statusMessage = document.querySelector("#status-message");
   const fileInput = document.querySelector("#file-input");
-  const check2 = document.querySelector("#check-option-2");
   const toRegisterBtn = document.querySelector("#to-register-btn");
 
   // Injected by scripts/gen_frontend_config.py from the root .env. Falls back
