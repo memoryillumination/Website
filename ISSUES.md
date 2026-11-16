@@ -1,7 +1,21 @@
 # Known Issues & Open Questions
 
 Running list of bugs, limitations, and oddities found while building the async
-GPU job pipeline and the upload-page rework (PR #8). Last updated 2026-08-23. Section 1 is fixed; sections 2-4 are open.
+GPU job pipeline and the upload-page rework (PR #8). Last updated 2026-11-16. Section 1 is fixed; sections 2-4 are open.
+
+---
+
+## RESOLVED — 2026-11-16
+
+### Issue #42 — Remove sketch functionality
+**Resolved by:** Removing the OpenCV sketch conversion code path from `backend/upload.py`,
+removing the sketch checkbox from `frontend/upload.html`, and updating all frontend
+JavaScript (`upload.js`, `main.js`) to always send `featureB: true`. The coloring page
+feature is now the only conversion option. Tests and documentation updated accordingly.
+
+---
+
+## 1. FIXED — 2026-08-23 (was: fix before merging PR #8)
 
 Severity is about user impact, not effort. Items are grouped by whether they
 block the current PR, and each links to the code it lives in.

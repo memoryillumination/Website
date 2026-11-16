@@ -57,7 +57,6 @@ window.addEventListener("DOMContentLoaded", () => {
   const uploadForm = document.querySelector("#upload-form");
   const statusMessage = document.querySelector("#status-message");
   const fileInput = document.querySelector("#file-input");
-  const check1 = document.querySelector("#check-option-1");
   const check2 = document.querySelector("#check-option-2");
   const toRegisterBtn = document.querySelector("#to-register-btn");
 
@@ -107,12 +106,7 @@ window.addEventListener("DOMContentLoaded", () => {
     statusMessage.textContent = "";
   });
 
-  check1.addEventListener("change", () => {
-    if (check1.checked) check2.checked = false;
-  });
-  check2.addEventListener("change", () => {
-    if (check2.checked) check1.checked = false;
-  });
+  // Sketch conversion removed — coloring page is the only option.
 
   // Register
   registerForm.addEventListener("submit", (e) => {
@@ -169,7 +163,7 @@ window.addEventListener("DOMContentLoaded", () => {
     statusMessage.textContent = "Processing image...";
     const formData = new FormData();
     formData.append("myFile", file);
-    formData.append("settings", JSON.stringify({ featureA: check1.checked, featureB: check2.checked }));
+    formData.append("settings", JSON.stringify({ featureB: true }));
     formData.append("token", sessionToken);
 
     fetch(`${API_BASE_URL}/upload-endpoint`, { method: "POST", body: formData })

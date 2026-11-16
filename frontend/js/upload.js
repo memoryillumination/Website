@@ -27,7 +27,6 @@ window.addEventListener("DOMContentLoaded", () => {
   const tryAgainButton = document.querySelector("#try-again");
   const statusMessage = document.querySelector("#status-message");
   const fileInput = document.querySelector("#file-input");
-  const check1 = document.querySelector("#check-option-1");
   const check2 = document.querySelector("#check-option-2");
   const progress = document.querySelector("#progress");
   const progressBar = document.querySelector("#progress-bar");
@@ -208,12 +207,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // --- FORM -----------------------------------------------------------------
 
-  check1.addEventListener("change", () => {
-    if (check1.checked) check2.checked = false;
-  });
-  check2.addEventListener("change", () => {
-    if (check2.checked) check1.checked = false;
-  });
+  // Sketch conversion removed — coloring page is the only option.
 
   // Both exits from the result view lead back to a fresh upload form. The
   // download link keeps its blob URL for a few seconds so the browser can
@@ -268,7 +262,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     const formData = new FormData();
     formData.append("myFile", file);
-    formData.append("settings", JSON.stringify({ featureA: check1.checked, featureB: check2.checked }));
+    formData.append("settings", JSON.stringify({ featureB: true }));
 
     try {
       const { isJson, body } = await postUpload(formData, (fraction) => {
