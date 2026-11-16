@@ -200,7 +200,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   const PHASE_TEXT = {
-    warming: "Warming up the GPU — first run in a while, so this one takes about a minute…",
+    warming: "Getting things ready — first run in a while, so this one takes about a minute…",
     generating: "Generating your image…",
   };
 
